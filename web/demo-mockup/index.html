@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>기업금융 Intelligence Portal — AI 기반 문서 분석 & 질의응답</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard-dynamic-subset.min.css"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <style type="text/tailwindcss">
+    @theme {
+      --color-sidebar: #1e293b;
+      --color-primary: #2563eb;
+      --color-primary-hover: #1d4ed8;
+      --color-primary-light: #dbeafe;
+      --color-surface: #f8fafc;
+      --color-border: #e2e8f0;
+      --color-text-primary: #0f172a;
+      --color-text-secondary: #475569;
+      --color-text-muted: #94a3b8;
+      --color-success: #10b981;
+      --color-warning: #f59e0b;
+      --color-danger: #ef4444;
+      --font-sans: 'Pretendard', 'Noto Sans KR', system-ui, -apple-system, sans-serif;
+    }
+  </style>
+  <style>
+    html, body, #app { height: 100%; margin: 0; padding: 0; }
+    body { font-family: 'Pretendard', system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; background-color: #f8fafc; color: #0f172a; }
+    .tab-active { border-bottom: 2px solid #2563eb; color: #2563eb; }
+    .tab-inactive { border-bottom: 2px solid transparent; color: #64748b; cursor:pointer; }
+    .tab-inactive:hover { color: #0f172a; }
+    .card-elevated { background: white; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); transition: box-shadow 0.2s; }
+    .card-elevated:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .table-rendered td, .table-rendered th { border:1px solid #e2e8f0; padding: 8px 12px; font-size: 13px; text-align: left; }
+    .table-rendered th { background-color: #dbeafe; font-weight: 600; }
+    .table-rendered tr:nth-child(even) td { background-color: #f8fafc; }
+    .chat-bubble-ai { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 12px 12px 12px 4px; }
+    .chat-bubble-user { background: #2563eb; color: white; border-radius: 12px 12px 4px 12px; }
+    .source-chip { background: #dbeafe; color: #1d4ed8; font-size: 11px; padding: 2px 8px; border-radius: 99px; cursor: pointer; }
+    .source-chip:hover { background: #bfdbfe; }
+    .doc-page { background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); min-height: 700px; }
+    .doc-page h1 { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
+    .doc-page p { font-size: 14px; line-height: 1.7; margin-bottom: 12px; color: #475569; }
+    .doc-page table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 16px 0; }
+    .doc-page th, .doc-page td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left; }
+    .doc-page th { background: #f8fafc; font-weight: 600; }
+    .page-thumb { cursor: pointer; border: 2px solid transparent; border-radius: 6px; overflow: hidden; }
+    .page-thumb:hover { border-color: #2563eb; }
+    .page-thumb.active { border-color: #2563eb; box-shadow: 0 0 0 3px #dbeafe; }
+    .table-highlight { border: 2px solid #2563eb !important; border-radius: 4px; }
+    .session-active { background: rgba(37,99,235,0.15); border-left: 3px solid #2563eb; }
+    .session-item:hover { background: rgba(255,255,255,0.08); }
+  </style>
+</head>
+<body>
+<div id="app" class="flex h-screen overflow-hidden">
+
+<aside class="w-[280px] flex flex-col bg-[#1e293b] text-white shrink-0">
+  <div class="px-5 py-6 flex items-center gap-3 border-b border-white/10">
+    <div class="w-9 h-9 rounded-lg bg-[#2563eb] flex items-center justify-center"><i class="ph ph-files text-lg text-white"></i></div>
+    <div>
+      <h1 class="text-[15px] font-bold tracking-tight">기업금융 Intelligence Portal</h1>
+      <p class="text-[11px] text-slate-400">AI 기반 문서 분석 & 질의응답</p>
+    </div>
+  </div>
+
+  <div class="p-4">
+    <button class="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-sm font-semibold transition-colors">
+      <i class="ph ph-plus text-lg"></i> 새 세션 만들기
+    </button>
+  </div>
+
+  <div class="flex-1 overflow-y-auto px-3 pb-4">
+    <div class="flex items-center justify-between mb-2 px-2">
+      <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wide">히스토리</h3>
+      <span class="text-[11px] px-2 py-0.5 bg-white/10 rounded-full">6개</span>
+    </div>
+
+    <div class="space-y-1">
+      <div class="session-active session-item p-3 rounded-lg cursor-pointer">
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-7 h-7 rounded bg-[#2563eb]/30 flex items-center justify-center shrink-0"><i class="ph ph-folder-open text-[#60a5fa] text-xs"></i></div>
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-medium truncate text-white">샘플기업_2024신용심사</p>
+            <p class="text-[11px] text-slate-400 mt-0.5">2026.05.08 · 2개 문서 · 60개 표</p>
+            <div class="flex items-center gap-1.5 mt-1.5">
+              <span class="text-[9px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">표검색 3회</span>
+              <span class="text-[9px] px-1.5 py-0.5 bg-[#dbeafe]/30 text-[#60a5fa] rounded">Q&A 12회</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="session-item p-3 rounded-lg cursor-pointer">
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-7 h-7 rounded bg-white/5 flex items-center justify-center shrink-0"><i class="ph ph-folder text-slate-500 text-xs"></i></div>
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-medium truncate text-slate-300">A기업_2023신용심사</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">2026.04.22 · 3개 문서 · 85개 표</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="session-item p-3 rounded-lg cursor-pointer">
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-7 h-7 rounded bg-white/5 flex items-center justify-center shrink-0"><i class="ph ph-folder text-slate-500 text-xs"></i></div>
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-medium truncate text-slate-300">B기업_PF대출심사</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">2026.04.15 · 1개 문서 · 24개 표</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="session-item p-3 rounded-lg cursor-pointer">
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-7 h-7 rounded bg-white/5 flex items-center justify-center shrink-0"><i class="ph ph-folder text-slate-500 text-xs"></i></div>
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-medium truncate text-slate-300">C기업_담보평가</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">2026.03.30 · 4개 문서 · 31개 표</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="session-item p-3 rounded-lg cursor-pointer">
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-7 h-7 rounded bg-white/5 flex items-center justify-center shrink-0"><i class="ph ph-folder text-slate-500 text-xs"></i></div>
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-medium truncate text-slate-300">D기업_부실채권_NPL</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">2026.03.18 · 2개 문서 · 45개 표</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="p-4 border-t border-white/10">
+    <p class="text-[11px] text-slate-500 text-center">기업금융 Intelligence Portal v0.1.0</p>
+  </div>
+</aside>
+
+<main class="flex-1 flex flex-col overflow-hidden bg-[#f8fafc]">
+
+  <!-- Session Header -->
+  <div class="bg-white border-b border-[#e2e8f0]">
+    <div class="px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-[#dbeafe] flex items-center justify-center"><i class="ph ph-folder-open text-[#2563eb]"></i></div>
+          <div>
+            <h2 class="text-[16px] font-bold text-[#0f172a]">샘플기업_2024신용심사</h2>
+            <p class="text-[12px] text-[#94a3b8]">생성일: 2026.05.08 · 마지막 활동: 5분 전</p>
+          </div>
+        </div>
+        <div class="h-8 w-px bg-[#e2e8f0]"></div>
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <span class="text-[12px] font-medium text-[#475569]"><i class="ph ph-files mr-1"></i>문서 2개</span>
+            <div class="flex items-center gap-2">
+              <span class="text-[12px] px-2.5 py-1.5 rounded-lg bg-[#f8fafc] border border-[#e2e8f0] text-[#475569] flex items-center gap-1.5">
+                <i class="ph ph-file-pdf text-red-500 text-sm"></i> 2024_기업분석_IM <span class="text-emerald-600 font-medium">42표</span>
+              </span>
+              <span class="text-[12px] px-2.5 py-1.5 rounded-lg bg-[#f8fafc] border border-[#e2e8f0] text-[#475569] flex items-center gap-1.5">
+                <i class="ph ph-file-pdf text-red-500 text-sm"></i> 여신심사보고서 <span class="text-emerald-600 font-medium">18표</span>
+              </span>
+            </div>
+          </div>
+          <button class="text-[12px] px-3 py-1.5 rounded-lg border-2 border-dashed border-[#cbd5e1] text-[#64748b] hover:border-[#2563eb] hover:text-[#2563eb] hover:bg-[#eff6ff] flex items-center gap-1.5 transition-all">
+            <i class="ph ph-upload-simple"></i> PDF 추가
+          </button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="px-3 py-1.5 rounded-lg border border-[#e2e8f0] text-[13px] font-medium text-[#475569] hover:bg-[#f1f5f9] flex items-center gap-1.5">
+          <i class="ph ph-share-network"></i> 공유
+        </button>
+        <button class="px-3 py-1.5 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13px] font-medium flex items-center gap-1.5">
+          <i class="ph ph-download-simple"></i> 보고서
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="px-6 pt-4 bg-white border-b border-[#e2e8f0] shrink-0">
+    <div class="flex items-center gap-1">
+      <button onclick="switchTab(0)" id="tab-btn-0" class="tab-active px-4 py-2.5 text-[13px] font-semibold flex items-center gap-2 rounded-t-lg">
+        <i class="ph ph-house"></i> 메인
+      </button>
+      <button onclick="switchTab(1)" id="tab-btn-1" class="tab-inactive px-4 py-2.5 text-[13px] font-medium flex items-center gap-2 rounded-t-lg">
+        <i class="ph ph-file-text"></i> 문서 보기
+      </button>
+      <button onclick="switchTab(2)" id="tab-btn-2" class="tab-inactive px-4 py-2.5 text-[13px] font-medium flex items-center gap-2 rounded-t-lg">
+        <i class="ph ph-table"></i> 표 검색
+      </button>
+      <button onclick="switchTab(3)" id="tab-btn-3" class="tab-inactive px-4 py-2.5 text-[13px] font-medium flex items-center gap-2 rounded-t-lg">
+        <i class="ph ph-chat-circle-dots"></i> Q&A
+      </button>
+    </div>
+  </div>
+
+  <div class="flex-1 overflow-y-auto p-6">
+    <div class="max-w-[1100px] mx-auto">
+
+      <div id="tab-0" class="tab-content fade-in">
+        <div class="max-w-[720px] mx-auto pt-8">
+
+          <div class="text-center mb-10">
+            <div class="w-14 h-14 rounded-2xl bg-[#2563eb] flex items-center justify-center mx-auto mb-4">
+              <i class="ph ph-files text-2xl text-white"></i>
+            </div>
+            <h1 class="text-2xl font-bold text-[#0f172a] tracking-tight">기업금융 Intelligence Portal</h1>
+            <p class="text-sm text-[#2563eb] font-medium mt-1">AI 기반 문서 분석 &amp; 질의응답</p>
+            <p class="text-[13px] text-[#94a3b8] mt-3 leading-relaxed max-w-md mx-auto">
+              PDF 문서를 업로드하면 표를 자동 추출하여 의미적으로 검색할 수 있습니다.<br>
+              추출된 표에 대해 AI에게 질문하고 답변을 받아보세요.
+            </p>
+          </div>
+
+          <div id="main-dropzone"
+               class="min-h-[360px] rounded-2xl border-2 border-dashed border-[#cbd5e1] bg-[#f8fafc] flex flex-col items-center justify-center cursor-pointer transition-all duration-200 hover:border-[#2563eb] hover:bg-[#eff6ff]"
+               ondragover="event.preventDefault(); this.classList.add('border-[#2563eb]','bg-[#dbeafe]/30'); this.classList.remove('border-[#cbd5e1]','bg-[#f8fafc]');"
+               ondragleave="this.classList.remove('border-[#2563eb]','bg-[#dbeafe]/30'); this.classList.add('border-[#cbd5e1]','bg-[#f8fafc]');"
+               ondrop="event.preventDefault(); this.classList.remove('border-[#2563eb]','bg-[#dbeafe]/30'); this.classList.add('border-[#cbd5e1]','bg-[#f8fafc]');"
+               onclick="document.getElementById('main-file-input').click()">
+            <div class="w-16 h-16 rounded-full bg-[#dbeafe] flex items-center justify-center mb-4">
+              <i class="ph ph-cloud-arrow-up text-3xl text-[#2563eb]"></i>
+            </div>
+            <p class="text-[15px] font-semibold text-[#0f172a]">PDF 파일을 드래그하여 업로드</p>
+            <p class="text-[13px] text-[#94a3b8] mt-1">또는 클릭하여 파일 선택</p>
+            <p class="text-[11px] text-[#94a3b8] mt-4 bg-white px-3 py-1.5 rounded-full border border-[#e2e8f0]">지원 형식: .pdf</p>
+            <input type="file" id="main-file-input" accept=".pdf" multiple class="hidden">
+          </div>
+
+          <div class="grid grid-cols-3 gap-4 mt-8">
+            <div onclick="switchTab(1)" class="p-5 rounded-xl bg-white border border-[#e2e8f0] hover:shadow-md hover:border-[#2563eb]/30 transition-all cursor-pointer group">
+              <div class="flex items-center justify-between mb-3">
+                <div class="w-10 h-10 rounded-lg bg-[#dbeafe] flex items-center justify-center">
+                  <i class="ph ph-file-text text-lg text-[#2563eb]"></i>
+                </div>
+                <i class="ph ph-arrow-right text-sm text-[#94a3b8] group-hover:text-[#2563eb] transition-colors"></i>
+              </div>
+              <h3 class="text-[13px] font-semibold text-[#0f172a]">문서 보기</h3>
+              <p class="text-[12px] text-[#94a3b8] mt-1 leading-relaxed">업로드된 PDF 문서를 스크롤로 확인하고, 표를 클릭하여 복사하거나 다운로드하세요</p>
+            </div>
+            <div onclick="switchTab(2)" class="p-5 rounded-xl bg-white border border-[#e2e8f0] hover:shadow-md hover:border-[#2563eb]/30 transition-all cursor-pointer group">
+              <div class="flex items-center justify-between mb-3">
+                <div class="w-10 h-10 rounded-lg bg-[#dbeafe] flex items-center justify-center">
+                  <i class="ph ph-magnifying-glass text-lg text-[#2563eb]"></i>
+                </div>
+                <i class="ph ph-arrow-right text-sm text-[#94a3b8] group-hover:text-[#2563eb] transition-colors"></i>
+              </div>
+              <h3 class="text-[13px] font-semibold text-[#0f172a]">표 검색</h3>
+              <p class="text-[12px] text-[#94a3b8] mt-1 leading-relaxed">자연어로 표를 의미적으로 검색하고, AI가 최적의 결과를 찾아줍니다</p>
+            </div>
+            <div onclick="switchTab(3)" class="p-5 rounded-xl bg-white border border-[#e2e8f0] hover:shadow-md hover:border-[#2563eb]/30 transition-all cursor-pointer group">
+              <div class="flex items-center justify-between mb-3">
+                <div class="w-10 h-10 rounded-lg bg-[#dbeafe] flex items-center justify-center">
+                  <i class="ph ph-chat-circle-dots text-lg text-[#2563eb]"></i>
+                </div>
+                <i class="ph ph-arrow-right text-sm text-[#94a3b8] group-hover:text-[#2563eb] transition-colors"></i>
+              </div>
+              <h3 class="text-[13px] font-semibold text-[#0f172a]">Q&A</h3>
+              <p class="text-[12px] text-[#94a3b8] mt-1 leading-relaxed">추출된 표에 대해 자유롭게 질문하고 AI가 답변을 제공합니다</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div id="tab-1" class="tab-content hidden">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-[#0f172a]">문서 보기</h2>
+          <p class="text-[13px] text-[#94a3b8] mt-0.5">업로드된 PDF 문서를 연속 스크롤로 확인하고, 표를 클릭하여 복사하거나 다운로드하세요</p>
+        </div>
+
+        <div class="flex gap-4" style="height: calc(100vh - 340px);">
+          <div class="w-56 flex flex-col shrink-0">
+            <div class="mb-3">
+              <p class="text-[12px] font-semibold text-[#475569] mb-2"><i class="ph ph-files mr-1"></i>문서 목록</p>
+              <div class="p-2 rounded-lg bg-[#dbeafe]/40 border border-[#2563eb]/20 cursor-pointer">
+                <p class="text-[12px] font-medium text-[#2563eb] truncate">2024_기업분석_IM.pdf</p>
+                <p class="text-[10px] text-[#94a3b8]">124페이지 · 42개 표</p>
+              </div>
+              <div class="p-2 rounded-lg hover:bg-[#f1f5f9] cursor-pointer mt-1">
+                <p class="text-[12px] font-medium text-[#475569] truncate">여신심사보고서_제안.pdf</p>
+                <p class="text-[10px] text-[#94a3b8]">56페이지 · 18개 표</p>
+              </div>
+            </div>
+            <div class="flex-1 overflow-y-auto">
+              <p class="text-[11px] font-semibold text-[#475569] mb-2 px-2"><i class="ph ph-list mr-1"></i>페이지 바로가기</p>
+              <div class="space-y-1">
+                <a href="#page-13" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">— 13페이지</a>
+                <a href="#page-14" class="block text-[11px] px-2 py-1.5 rounded bg-[#dbeafe]/40 text-[#2563eb] font-medium">— 14페이지 (표2개)</a>
+                <a href="#page-15" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">— 15페이지 (표1개)</a>
+                <a href="#page-16" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">— 16페이지</a>
+                <a href="#page-17" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">— 17페이지</a>
+                <a href="#page-18" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">— 18페이지 (표3개)</a>
+                <a href="#page-19" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">— 19페이지</a>
+              </div>
+
+              <div class="border-t border-[#e2e8f0] mt-3 pt-2">
+                <p class="text-[11px] font-semibold text-[#475569] mb-2 px-2"><i class="ph ph-table mr-1"></i>표 목록 (42개)</p>
+                <div class="space-y-0.5">
+                  <p class="text-[10px] text-[#94a3b8] px-2 mb-1">2024_기업분석_IM.pdf</p>
+                  <a href="#page-14" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">
+                    <div class="flex items-center gap-1.5">
+                      <i class="ph ph-table text-[#2563eb]"></i>
+                      <span class="truncate">사업부별 매출 현황</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 mt-0.5 pl-5">
+                      <span class="text-[10px] text-[#94a3b8]">p.14</span>
+                      <span class="text-[9px] px-1 py-0.5 bg-[#dbeafe] text-[#2563eb] rounded">재무제표</span>
+                    </div>
+                  </a>
+                  <a href="#page-15" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">
+                    <div class="flex items-center gap-1.5">
+                      <i class="ph ph-table text-[#2563eb]"></i>
+                      <span class="truncate">분기별 매출 추이</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 mt-0.5 pl-5">
+                      <span class="text-[10px] text-[#94a3b8]">p.15</span>
+                      <span class="text-[9px] px-1 py-0.5 bg-gray-100 text-gray-600 rounded">손익계산서</span>
+                    </div>
+                  </a>
+                  <a href="#page-16" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">
+                    <div class="flex items-center gap-1.5">
+                      <i class="ph ph-table text-[#2563eb]"></i>
+                      <span class="truncate">재무상태표 요약</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 mt-0.5 pl-5">
+                      <span class="text-[10px] text-[#94a3b8]">p.16</span>
+                      <span class="text-[9px] px-1 py-0.5 bg-[#dbeafe] text-[#2563eb] rounded">재무제표</span>
+                    </div>
+                  </a>
+                  <p class="text-[10px] text-[#94a3b8] px-2 mt-2 mb-1">여신심사보고서_제안.pdf</p>
+                  <a href="#page-22" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">
+                    <div class="flex items-center gap-1.5">
+                      <i class="ph ph-table text-[#2563eb]"></i>
+                      <span class="truncate">PF 대출 현황</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 mt-0.5 pl-5">
+                      <span class="text-[10px] text-[#94a3b8]">p.22</span>
+                      <span class="text-[9px] px-1 py-0.5 bg-[#fef2f2] text-[#ef4444] rounded">리스크</span>
+                    </div>
+                  </a>
+                  <a href="#page-31" class="block text-[11px] px-2 py-1.5 rounded hover:bg-[#f1f5f9] text-[#475569]">
+                    <div class="flex items-center gap-1.5">
+                      <i class="ph ph-table text-[#2563eb]"></i>
+                      <span class="truncate">담보 평가 현황</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 mt-0.5 pl-5">
+                      <span class="text-[10px] text-[#94a3b8]">p.31</span>
+                      <span class="text-[9px] px-1 py-0.5 bg-[#f0fdf4] text-[#16a34a] rounded">담보</span>
+                    </div>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto bg-[#f1f5f9] rounded-lg border border-[#e2e8f0]">
+            <div class="max-w-[700px] mx-auto py-8 space-y-8">
+
+              <div id="page-13" class="bg-white rounded-lg border border-[#e2e8f0] p-8 shadow-sm">
+                <p class="text-[11px] text-[#94a3b8] text-center mb-6">— 13페이지 —</p>
+                <h1 class="text-[18px] font-bold text-[#0f172a] mb-4">사업 개요</h1>
+                <p class="text-[13px] text-[#475569] leading-relaxed mb-4">샘플기업 주식회사는 2005년 설립된 반도체 소재 전문 기업으로, 국내외 주요 반도체 제조사에 핵심 소재를 공급하고 있습니다. 2024년 기준 직원 수는 1,850명이며, 국내 3개 공장과 중국 1개 공장을 운영 중입니다.</p>
+                <p class="text-[13px] text-[#475569] leading-relaxed">주요 제품군으로는 반도체 포토레지스트, CMP 슬러리, 고순도 화학약품 등이 있으며, 특히 EUV 포토레지스트 분야에서 글로벌 Top 3 시장 점유율을 기록하고 있습니다.</p>
+              </div>
+
+              <div id="page-14" class="bg-white rounded-lg border border-[#e2e8f0] p-8 shadow-sm">
+                <p class="text-[11px] text-[#94a3b8] text-center mb-6">— 14페이지 —</p>
+                <h1 class="text-[18px] font-bold text-[#0f172a] mb-4">사업부별 매출 현황</h1>
+                <p class="text-[13px] text-[#475569] leading-relaxed mb-4">본사는 반도체, 디스플레이, 자동차부품 등 3개 사업부로 구성되어 있으며, 2024년 기준 전체 매출은 7,750억원을 기록하였습니다. 반도체 사업부는 메모리 반도체 특화 기술을 보유하여 2024년 매출 4,720억원(YoY +22.6%)을 기록하며 회사 전체 성장을 주도하고 있습니다.</p>
+
+                <div class="table-with-actions relative group my-4">
+                  <div class="absolute -top-3 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5">
+                    <span class="text-[10px] px-2 py-1 bg-[#dbeafe] text-[#2563eb] rounded-md font-medium">사업부별 매출 현황 표</span>
+                    <button onclick="copyTable(this)" class="text-[11px] px-2 py-1 rounded bg-white border border-[#e2e8f0] text-[#475569] hover:bg-[#f1f5f9] flex items-center gap-1 shadow-sm">
+                      <i class="ph ph-copy"></i> 복사
+                    </button>
+                    <button onclick="downloadExcel(this)" class="text-[11px] px-2 py-1 rounded bg-[#2563eb] text-white hover:bg-[#1d4ed8] flex items-center gap-1 shadow-sm">
+                      <i class="ph ph-table"></i> Excel
+                    </button>
+                  </div>
+                  <div class="table-highlight cursor-pointer">
+                    <table class="w-full">
+                      <thead><tr><th>사업부</th><th class="text-right">2022년</th><th class="text-right">2023년</th><th class="text-right">2024년</th><th class="text-right">증가율</th></tr></thead>
+                      <tbody>
+                        <tr><td class="font-medium">반도체</td><td class="text-right">3,200</td><td class="text-right">3,850</td><td class="text-right font-bold">4,720</td><td class="text-right text-[#16a34a]">+22.6%</td></tr>
+                        <tr><td class="font-medium">디스플레이</td><td class="text-right">1,800</td><td class="text-right">1,650</td><td class="text-right">1,580</td><td class="text-right text-[#ef4444]">-4.2%</td></tr>
+                        <tr><td class="font-medium">자동차부품</td><td class="text-right">890</td><td class="text-right">1,120</td><td class="text-right">1,450</td><td class="text-right text-[#16a34a]">+29.5%</td></tr>
+                        <tr class="bg-[#f8fafc] font-semibold"><td>합계</td><td class="text-right">5,890</td><td class="text-right">6,620</td><td class="text-right">7,750</td><td class="text-right text-[#16a34a]">+17.1%</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <p class="text-[12px] text-[#94a3b8] text-center mt-2">※ 금액 단위: 백만원</p>
+                <p class="text-[13px] text-[#475569] leading-relaxed mt-4">디스플레이 사업부는 중국 업체의 가격 공세로 인해 시장 점유율이 8.2%에서 6.1%로 하락하였으나, OLED 패널 사업 확대를 통해 2025년 turnaround를 기대하고 있습니다.</p>
+              </div>
+
+              <div id="page-15" class="bg-white rounded-lg border border-[#e2e8f0] p-8 shadow-sm">
+                <p class="text-[11px] text-[#94a3b8] text-center mb-6">— 15페이지 —</p>
+                <h1 class="text-[18px] font-bold text-[#0f172a] mb-4">분기별 매출 추이</h1>
+                <p class="text-[13px] text-[#475569] leading-relaxed mb-4">2024년 분기별 매출 및 영업이익 현황입니다. 4분기 영업이익률은 9.0%를 기록하였으며, 전년 동기 대비 개선되었습니다.</p>
+
+                <div class="table-with-actions relative group my-4">
+                  <div class="absolute -top-3 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5">
+                    <span class="text-[10px] px-2 py-1 bg-[#dbeafe] text-[#2563eb] rounded-md font-medium">분기별 매출 추이 표</span>
+                    <button onclick="copyTable(this)" class="text-[11px] px-2 py-1 rounded bg-white border border-[#e2e8f0] text-[#475569] hover:bg-[#f1f5f9] flex items-center gap-1 shadow-sm">
+                      <i class="ph ph-copy"></i> 복사
+                    </button>
+                    <button onclick="downloadExcel(this)" class="text-[11px] px-2 py-1 rounded bg-[#2563eb] text-white hover:bg-[#1d4ed8] flex items-center gap-1 shadow-sm">
+                      <i class="ph ph-table"></i> Excel
+                    </button>
+                  </div>
+                  <div class="table-highlight cursor-pointer">
+                    <table class="w-full">
+                      <thead><tr><th>분기</th><th class="text-right">매출</th><th class="text-right">영업이익</th><th class="text-right">영업이익률</th><th class="text-right">전년동기</th></tr></thead>
+                      <tbody>
+                        <tr><td>2024 Q1</td><td class="text-right">1,780</td><td class="text-right">142</td><td class="text-right">8.0%</td><td class="text-right text-[#16a34a]">+12%</td></tr>
+                        <tr><td>2024 Q2</td><td class="text-right">1,920</td><td class="text-right">168</td><td class="text-right">8.7%</td><td class="text-right text-[#16a34a]">+15%</td></tr>
+                        <tr><td>2024 Q3</td><td class="text-right">2,050</td><td class="text-right">195</td><td class="text-right">9.5%</td><td class="text-right text-[#16a34a]">+20%</td></tr>
+                        <tr><td>2024 Q4</td><td class="text-right">2,000</td><td class="text-right">180</td><td class="text-right">9.0%</td><td class="text-right text-[#16a34a]">+18%</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <p class="text-[12px] text-[#94a3b8] text-center mt-2">※ 금액 단위: 백만원</p>
+                <p class="text-[13px] text-[#475569] leading-relaxed mt-4">3분기 영업이익률 9.5%는 연중 최고 수준이며, 이는 반도체 사업부의 고부가가치 제품 비중 확대와 원가 절감 노력의 결과입니다.</p>
+              </div>
+
+              <div id="page-16" class="bg-white rounded-lg border border-[#e2e8f0] p-8 shadow-sm">
+                <p class="text-[11px] text-[#94a3b8] text-center mb-6">— 16페이지 —</p>
+                <h1 class="text-[18px] font-bold text-[#0f172a] mb-4">재무상태표 요약</h1>
+                <p class="text-[13px] text-[#475569] leading-relaxed">2024년 말 기준 주요 재무 지표입니다. 자산총계는 12,450억원, 부채총계는 7,340억원, 자본총계는 5,110억원입니다. 부채비율은 132%로 전년 대비 상승하였으며, 이는 PF 대출 확대에 기인합니다.</p>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-2" class="tab-content hidden">
+        <div class="flex items-end justify-between mb-5">
+          <div>
+            <h2 class="text-lg font-bold text-[#0f172a]">표 검색</h2>
+            <p class="text-[13px] text-[#94a3b8] mt-0.5">PDF 문서에서 의미적으로 관련된 표를 검색하고, 표에 대해서 질문하세요</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] px-2 py-1 bg-[#dbeafe] text-[#2563eb] rounded-md font-medium">HOT</span>
+            <span class="text-[11px] text-[#94a3b8]">총 60개 표 인덱싱 완료</span>
+          </div>
+        </div>
+
+        <div class="card-elevated p-1 mb-2 flex items-center gap-2">
+          <i class="ph ph-magnifying-glass text-[#94a3b8] text-lg ml-3"></i>
+          <input value="2024년 사업부별 매출 현황" class="flex-1 bg-transparent outline-none text-[14px] text-[#0f172a] placeholder-[#94a3b8] py-2.5"
+                 placeholder="검색어를 입력하세요. 예: 부채비율 추이, 영업이익 현황..."/>
+          <button class="px-5 py-2.5 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13px] font-semibold flex items-center gap-1.5">
+            <i class="ph ph-sparkle"></i> Smart Search
+          </button>
+        </div>
+
+        <div class="flex items-center justify-end mb-5">
+          <span class="text-[11px] text-[#94a3b8] flex items-center gap-1">
+            <i class="ph ph-clock"></i> 검색 소요: 0.8초
+          </span>
+        </div>
+
+        <div class="space-y-4">
+          <div class="card-elevated p-5">
+            <div class="flex items-start justify-between mb-4">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-[#dbeafe] flex items-center justify-center shrink-0"><i class="ph ph-table text-[#2563eb] text-lg"></i></div>
+                <div>
+                  <h3 class="text-[14px] font-semibold text-[#0f172a]">사업부별 매출 현황</h3>
+                  <div class="flex items-center gap-2 mt-1">
+                    <span class="text-[11px] text-[#94a3b8] flex items-center gap-1"><i class="ph ph-file"></i> 2024_기업분석_IM.pdf</span>
+                    <span class="text-[11px] text-[#94a3b8] flex items-center gap-1"><i class="ph ph-file-text"></i> p. 14</span>
+                    <span class="text-[10px] px-1.5 py-0.5 bg-[#dbeafe] text-[#2563eb] rounded font-medium">재무제표</span>
+                    <span class="text-[10px] px-1.5 py-0.5 bg-[#dcfce7] text-[#16a34a] rounded font-medium">Smart 선택</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <p class="text-[20px] font-bold text-[#2563eb]">97.3%</p>
+                <p class="text-[11px] text-[#94a3b8]">관련도 점수</p>
+              </div>
+            </div>
+
+            <div class="table-rendered overflow-x-auto rounded-lg border border-[#e2e8f0] mb-4">
+              <table class="w-full">
+                <thead><tr><th>사업부</th><th>2022년</th><th>2023년</th><th>2024년</th><th>증가율 (YoY)</th></tr></thead>
+                <tbody>
+                  <tr><td class="font-medium">반도체</td><td>3,200</td><td>3,850</td><td>4,720</td><td class="text-[#16a34a]">+22.6%</td></tr>
+                  <tr><td class="font-medium">디스플레이</td><td>1,800</td><td>1,650</td><td>1,580</td><td class="text-[#ef4444]">-4.2%</td></tr>
+                  <tr><td class="font-medium">자동차부품</td><td>890</td><td>1,120</td><td>1,450</td><td class="text-[#16a34a]">+29.5%</td></tr>
+                  <tr class="bg-[#dbeafe]/50 font-semibold"><td>합계</td><td>5,890</td><td>6,620</td><td>7,750</td><td class="text-[#16a34a]">+17.1%</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <div class="text-[12px] px-3 py-1.5 bg-[#f0fdf4] text-[#16a34a] rounded-md border border-[#bbf7d0] flex items-center gap-1.5">
+                  <i class="ph ph-trend-up"></i> 반도체 사업부 YoY +22.6% 성장
+                </div>
+                <div class="text-[12px] px-3 py-1.5 bg-[#fef2f2] text-[#ef4444] rounded-md border border-[#fecaca] flex items-center gap-1.5">
+                  <i class="ph ph-trend-down"></i> 디스플레이 사업부 YoY -4.2% 감소
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="text-[12px] px-3 py-1.5 rounded-lg border border-[#e2e8f0] text-[#475569] hover:bg-[#f1f5f9] flex items-center gap-1.5"><i class="ph ph-table"></i> Excel</button>
+                <button class="text-[12px] px-3 py-1.5 rounded-lg bg-[#2563eb] text-white hover:bg-[#1d4ed8] flex items-center gap-1.5"><i class="ph ph-chat-circle"></i> 이 표에 질문하기</button>
+                <button class="text-[12px] px-3 py-1.5 rounded-lg border border-[#e2e8f0] text-[#475569] hover:bg-[#f1f5f9] flex items-center gap-1.5"><i class="ph ph-copy"></i> 표 복사</button>
+              </div>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-[#e2e8f0]">
+              <div class="flex items-center gap-2 mb-3">
+                <i class="ph ph-chat-circle text-[#2563eb]"></i>
+                <span class="text-[13px] font-semibold text-[#0f172a]">이 표에 대한 질의응답</span>
+                <span class="text-[11px] px-2 py-0.5 bg-[#dbeafe] text-[#2563eb] rounded-full">AI 심사역</span>
+              </div>
+              <div class="flex flex-wrap gap-2 mb-3">
+                <span class="text-[11px] text-[#94a3b8]">추천 질문:</span>
+                <button class="text-[11px] px-2 py-1 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">3년 평균 성장률은?</button>
+                <button class="text-[11px] px-2 py-1 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">디스플레이 감소가 전체에 미친 영향?</button>
+                <button class="text-[11px] px-2 py-1 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">2024년 전체 매출 대비 반도체 비중?</button>
+                <button class="text-[11px] px-2 py-1 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">표의 가로축과 세로축을 변경해줘</button>
+              </div>
+              <div class="flex items-end gap-2 mb-3">
+                <div class="flex-1 relative">
+                  <input value="반도체 사업부 3년 평균 성장률을 계산해줘"
+                         class="w-full rounded-lg border border-[#e2e8f0] px-3 py-2 pr-10 text-[13px] outline-none focus:border-[#2563eb] focus:ring-1 focus:ring-[#2563eb]/20"
+                         placeholder="이 표에 대해 궁금한 점을 질문하세요..." />
+                </div>
+                <button class="px-4 py-2 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13px] font-semibold flex items-center gap-1.5">
+                  <i class="ph ph-paper-plane-right"></i> 질문하기
+                </button>
+              </div>
+              <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-[#2563eb] flex items-center justify-center shrink-0"><i class="ph ph-sparkle text-white text-sm"></i></div>
+                <div class="flex-1 min-w-0">
+                  <div class="chat-bubble-ai p-4 max-w-[95%]">
+                    <p class="text-[13px] text-[#0f172a] leading-relaxed mb-2">
+                      반도체 사업부의 3년 평균 연평균 성장률(CAGR)은 <strong>21.5%</strong>입니다.
+                    </p>
+                    <div class="bg-white rounded-lg border border-[#e2e8f0] overflow-hidden mb-2">
+                      <table class="w-full text-[12px]">
+                        <thead><tr class="bg-[#dbeafe]"><th class="p-2 text-left">연도</th><th class="p-2 text-right">매출(억원)</th><th class="p-2 text-right">성장률</th></tr></thead>
+                        <tbody>
+                          <tr class="border-b border-[#f1f5f9]"><td class="p-2">2022 → 2023</td><td class="p-2 text-right">3,200 → 3,850</td><td class="p-2 text-right text-[#16a34a]">+20.3%</td></tr>
+                          <tr><td class="p-2">2023 → 2024</td><td class="p-2 text-right">3,850 → 4,720</td><td class="p-2 text-right text-[#16a34a]">+22.6%</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p class="text-[12px] text-[#475569] leading-relaxed">
+                      공식: CAGR = (4,720/3,200)^(1/2) - 1 = 21.5%<br>
+                      반도체 사업부는 3년 연속 20% 이상의 고성장을 유지하고 있으며, 이는 회사 전체 성장의 핵심 동력입니다.
+                    </p>
+                    <div class="flex items-center gap-2 mt-2 text-[11px] text-[#94a3b8]">
+                      <i class="ph ph-info"></i> 본 답변은 "사업부별 매출 현황" 표(p.14)의 데이터를 기반으로 합니다.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex items-end gap-2 mb-3">
+                <div class="flex-1 relative">
+                  <input value="표의 가로축과 세로축을 변경해줘"
+                         class="w-full rounded-lg border border-[#e2e8f0] px-3 py-2 pr-10 text-[13px] outline-none focus:border-[#2563eb] focus:ring-1 focus:ring-[#2563eb]/20"
+                         placeholder="이 표에 대해 궁금한 점을 질문하세요..." />
+                </div>
+                <button class="px-4 py-2 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13px] font-semibold flex items-center gap-1.5">
+                  <i class="ph ph-paper-plane-right"></i> 질문하기
+                </button>
+              </div>
+              <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-[#2563eb] flex items-center justify-center shrink-0"><i class="ph ph-sparkle text-white text-sm"></i></div>
+                <div class="flex-1 min-w-0">
+                  <div class="chat-bubble-ai p-4 max-w-[95%]">
+                    <p class="text-[13px] text-[#0f172a] leading-relaxed mb-2">
+                      표의 행과 열을 교환하여 가로축과 세로축을 변경했습니다. 이제 연도별로 사업부의 매출 성과를 비교하기에 더 적합한 형태입니다.
+                    </p>
+                    <div class="bg-white rounded-lg border border-[#e2e8f0] overflow-hidden mb-2">
+                      <table class="w-full text-[12px]">
+                        <thead><tr class="bg-[#dbeafe]"><th class="p-2 text-left">연도</th><th class="p-2 text-right">반도체</th><th class="p-2 text-right">디스플레이</th><th class="p-2 text-right">자동차부품</th><th class="p-2 text-right">합계</th></tr></thead>
+                        <tbody>
+                          <tr class="border-b border-[#f1f5f9]"><td class="p-2 font-medium">2022년</td><td class="p-2 text-right">3,200</td><td class="p-2 text-right">1,800</td><td class="p-2 text-right">890</td><td class="p-2 text-right font-semibold">5,890</td></tr>
+                          <tr class="border-b border-[#f1f5f9]"><td class="p-2 font-medium">2023년</td><td class="p-2 text-right">3,850</td><td class="p-2 text-right">1,650</td><td class="p-2 text-right">1,120</td><td class="p-2 text-right font-semibold">6,620</td></tr>
+                          <tr><td class="p-2 font-medium">2024년</td><td class="p-2 text-right font-bold text-[#16a34a]">4,720</td><td class="p-2 text-right text-[#ef4444]">1,580</td><td class="p-2 text-right">1,450</td><td class="p-2 text-right font-semibold">7,750</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p class="text-[12px] text-[#475569] leading-relaxed">
+                      이렇게 보면 2024년 반도체 사업부(4,720억원)가 디스플레이(1,580억원)와 자동차부품(1,450억원)을 합친 것보다 더 큰 매출을 기록하고 있음을 한눈에 파악할 수 있습니다. 반도체가 전체 매출의 60.9%를 차지합니다.
+                    </p>
+                    <div class="flex items-center gap-2 mt-2 text-[11px] text-[#94a3b8]">
+                      <i class="ph ph-info"></i> 본 답변은 "사업부별 매출 현황" 표(p.14)의 데이터를 기반으로 합니다.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-elevated p-5">
+            <div class="flex items-start justify-between mb-4">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center shrink-0"><i class="ph ph-table text-[#475569] text-lg"></i></div>
+                <div>
+                  <h3 class="text-[14px] font-semibold text-[#0f172a]">분기별 매출 추이</h3>
+                  <div class="flex items-center gap-2 mt-1">
+                    <span class="text-[11px] text-[#94a3b8] flex items-center gap-1"><i class="ph ph-file"></i> 2024_기업분석_IM.pdf</span>
+                    <span class="text-[11px] text-[#94a3b8] flex items-center gap-1"><i class="ph ph-file-text"></i> p. 15</span>
+                    <span class="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded font-medium">손익계산서</span>
+                  </div>
+                </div>
+              </div>
+              <div class="text-right">
+                <p class="text-[20px] font-bold text-[#475569]">78.5%</p>
+                <p class="text-[11px] text-[#94a3b8]">관련도 점수</p>
+              </div>
+            </div>
+            <div class="table-rendered overflow-x-auto rounded-lg border border-[#e2e8f0] mb-4">
+              <table class="w-full">
+                <thead><tr><th>분기</th><th>매출</th><th>영업이익</th><th>영업이익률</th><th>전년동기</th></tr></thead>
+                <tbody>
+                  <tr><td>2024 Q1</td><td>1,780</td><td>142</td><td>8.0%</td><td class="text-[#16a34a]">+12%</td></tr>
+                  <tr><td>2024 Q2</td><td>1,920</td><td>168</td><td>8.7%</td><td class="text-[#16a34a]">+15%</td></tr>
+                  <tr><td>2024 Q3</td><td>2,050</td><td>195</td><td>9.5%</td><td class="text-[#16a34a]">+20%</td></tr>
+                  <tr><td>2024 Q4</td><td>2,000</td><td>180</td><td>9.0%</td><td class="text-[#16a34a]">+18%</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="text-[12px] px-3 py-1.5 bg-[#f0fdf4] text-[#16a34a] rounded-md border border-[#bbf7d0]">영업이익률 9.5% (전년 대비 +2.1%p)</div>
+              <div class="flex items-center gap-2">
+                <button class="text-[12px] px-3 py-1.5 rounded-lg border border-[#e2e8f0] text-[#475569]">Excel</button>
+                <button class="text-[12px] px-3 py-1.5 rounded-lg bg-[#2563eb] text-white hover:bg-[#1d4ed8] flex items-center gap-1.5"><i class="ph ph-chat-circle"></i> 이 표에 질문하기</button>
+                <button class="text-[12px] px-3 py-1.5 rounded-lg border border-[#e2e8f0] text-[#475569] hover:bg-[#f1f5f9] flex items-center gap-1.5"><i class="ph ph-copy"></i> 표 복사</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div id="tab-3" class="tab-content hidden">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-[#0f172a]">문서 기반 Q&A</h2>
+          <p class="text-[13px] text-[#94a3b8] mt-0.5">업로드된 문서(180페이지, 60개 표)를 기반으로 자유롭게 질의응답</p>
+        </div>
+
+        <div class="card-elevated overflow-hidden flex flex-col" style="height: calc(100vh - 340px);">
+          <div class="px-5 py-3 border-b border-[#e2e8f0] flex items-center justify-between bg-[#f8fafc]">
+            <div class="flex items-center gap-2">
+              <i class="ph ph-chat-circle-dots text-[#2563eb]"></i>
+              <span class="text-[13px] font-semibold">AI 심사역</span>
+              <span class="text-[11px] px-2 py-0.5 bg-[#f0fdf4] text-[#16a34a] rounded-full flex items-center gap-1"><span class="w-2 h-2 bg-[#10b981] rounded-full"></span> 문서 이해 완료</span>
+            </div>
+            <button class="text-[12px] px-3 py-1.5 rounded-lg border border-[#e2e8f0] text-[#475569] hover:bg-[#f1f5f9]"><i class="ph ph-arrow-counter-clockwise"></i> 대화 초기화</button>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-6 space-y-5 bg-[#f8fafc]">
+            <div class="flex flex-wrap gap-2 mb-2">
+              <button class="text-[12px] px-3 py-1.5 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">부채비율 추이는?</button>
+              <button class="text-[12px] px-3 py-1.5 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">PF대출 만기는 언제?</button>
+              <button class="text-[12px] px-3 py-1.5 rounded-full border border-[#e2e8f0] text-[#475569] hover:border-[#2563eb] hover:text-[#2563eb] bg-white">담보가치 변동 리스크는?</button>
+            </div>
+
+            <div class="flex items-start gap-3">
+              <div class="w-8 h-8 rounded-lg bg-[#2563eb] flex items-center justify-center shrink-0"><i class="ph ph-sparkle text-white text-sm"></i></div>
+              <div class="flex-1 min-w-0">
+                <div class="chat-bubble-ai p-4 max-w-[90%]">
+                  <p class="text-[13px] text-[#0f172a] leading-relaxed">안녕하세요. <strong>샘플기업 주식회사</strong>의 기업분석 IM, 여신심사보고서를 모두 읽었습니다. 총 180페이지, 60개의 표를 분석하였습니다.<br><br>문서에 대해 궁금한 점을 자유롭게 질문해 주세요.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-start gap-3 justify-end">
+              <div class="flex-1 min-w-0 flex justify-end">
+                <div class="chat-bubble-user p-4 max-w-[85%]"><p class="text-[13px] leading-relaxed">이 기업의 부채비율이 악화된 구체적인 원인이 뭐야? PF 대출과 관련이 있어?</p></div>
+              </div>
+              <div class="w-8 h-8 rounded-full bg-[#cbd5e1] flex items-center justify-center shrink-0 text-[#475569] text-xs font-bold">신</div>
+            </div>
+
+            <div class="flex items-start gap-3">
+              <div class="w-8 h-8 rounded-lg bg-[#2563eb] flex items-center justify-center shrink-0"><i class="ph ph-sparkle text-white text-sm"></i></div>
+              <div class="flex-1 min-w-0">
+                <div class="chat-bubble-ai p-4 max-w-[95%]">
+                  <p class="text-[13px] text-[#0f172a] leading-relaxed mb-3">네, 부채비율 악화의 주요 원인은 <strong>PF 대출 확대</strong>입니다.</p>
+                  <div class="bg-white rounded-lg border border-[#e2e8f0] p-3 mb-3">
+                    <p class="text-[12px] font-semibold text-[#0f172a] mb-2">주요 원인 분석</p>
+                    <ul class="space-y-1.5 text-[12px] text-[#475569]">
+                      <li class="flex items-start gap-2"><span class="mt-1 w-1 h-1 rounded-full bg-[#ef4444] shrink-0"></span>PF 대출 실행: 2023년 강남 사무실 리모델링(780억), 2024년 판교 지식산업센터 신축(920억)</li>
+                      <li class="flex items-start gap-2"><span class="mt-1 w-1 h-1 rounded-full bg-[#ef4444] shrink-0"></span>운전자본 확대: 반도체 원자재 선수급 증가로 단기차입금 +350억</li>
+                      <li class="flex items-start gap-2"><span class="mt-1 w-1 h-1 rounded-full bg-[#ef4444] shrink-0"></span>자본 잠식 없음: 자본금 변동 없이 부채만 증가 → 레버리지 효과</li>
+                    </ul>
+                  </div>
+                  <div class="bg-white rounded-lg border border-[#e2e8f0] overflow-hidden mb-3">
+                    <table class="w-full text-[12px]">
+                      <thead><tr class="bg-[#dbeafe]"><th class="p-2 text-left">구분</th><th class="p-2 text-right">2022</th><th class="p-2 text-right">2023</th><th class="p-2 text-right">2024</th></tr></thead>
+                      <tbody>
+                        <tr class="border-b border-[#f1f5f9]"><td class="p-2">부채비율</td><td class="p-2 text-right">85%</td><td class="p-2 text-right">108%</td><td class="p-2 text-right font-bold text-[#ef4444]">132%</td></tr>
+                        <tr><td class="p-2">PF 대출 잔액</td><td class="p-2 text-right">-</td><td class="p-2 text-right">780억</td><td class="p-2 text-right">1,700억</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span class="source-chip"><i class="ph ph-file-text mr-1"></i>p.15 대차대조표</span>
+                    <span class="source-chip"><i class="ph ph-file-text mr-1"></i>p.29 PF 현황</span>
+                    <span class="source-chip"><i class="ph ph-file-text mr-1"></i>p.47 여신약정</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-start gap-3 justify-end">
+              <div class="flex-1 min-w-0 flex justify-end"><div class="chat-bubble-user p-4 max-w-[85%]"><p class="text-[13px] leading-relaxed">만약 판교 센터가 분양률 50%에 그치면 DSCR은?</p></div></div>
+              <div class="w-8 h-8 rounded-full bg-[#cbd5e1] flex items-center justify-center shrink-0 text-[#475569] text-xs font-bold">신</div>
+            </div>
+
+            <div class="flex items-start gap-3">
+              <div class="w-8 h-8 rounded-lg bg-[#2563eb] flex items-center justify-center shrink-0"><i class="ph ph-sparkle text-white text-sm"></i></div>
+              <div class="flex-1 min-w-0">
+                <div class="chat-bubble-ai p-4 max-w-[95%]">
+                  <div class="flex items-center gap-2 text-[#94a3b8]"><div class="w-4 h-4 border-2 border-[#94a3b8] border-t-transparent rounded-full animate-spin"></div><span class="text-[13px]">문서를 검색하고 계산 중...</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-4 border-t border-[#e2e8f0] bg-white">
+            <div class="flex items-end gap-2">
+              <div class="flex-1 relative">
+                <textarea rows="1" placeholder="문서에 대해 궁금한 점을 질문하세요..." class="w-full resize-none rounded-xl border border-[#e2e8f0] px-4 py-3 pr-10 text-[13px] outline-none focus:border-[#2563eb] focus:ring-1 focus:ring-[#2563eb]/20"></textarea>
+                <button class="absolute right-3 bottom-2.5 text-[#94a3b8] hover:text-[#2563eb]"><i class="ph ph-paperclip text-lg"></i></button>
+              </div>
+              <button class="w-10 h-10 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white flex items-center justify-center shrink-0"><i class="ph ph-paper-plane-right text-lg"></i></button>
+            </div>
+            <p class="text-[11px] text-[#94a3b8] mt-2 text-center">AI 답변은 문서 기반이지만, 최종 결정은 심사역의 검토가 필요합니다.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+</div>
+
+<script>
+function switchTab(index) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+  document.getElementById('tab-' + index).classList.remove('hidden');
+  const btnIds = ['tab-btn-0', 'tab-btn-1', 'tab-btn-2', 'tab-btn-3'];
+  btnIds.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (i === index) {
+      el.classList.remove('tab-inactive');
+      el.classList.add('tab-active');
+    } else {
+      el.classList.remove('tab-active');
+      el.classList.add('tab-inactive');
+    }
+  });
+}
+
+function copyTable(btn) {
+  const table = btn.closest('.table-with-actions').querySelector('table');
+  let text = '';
+  table.querySelectorAll('tr').forEach(tr => {
+    const cells = Array.from(tr.querySelectorAll('td, th')).map(c => c.innerText.trim());
+    if (cells.length > 0) text += cells.join('\t') + '\n';
+  });
+  navigator.clipboard.writeText(text).then(() => {
+    const original = btn.innerHTML;
+    btn.innerHTML = '<i class="ph ph-check"></i> 복사됨';
+    setTimeout(() => btn.innerHTML = original, 1500);
+  });
+}
+
+function downloadExcel(btn) {
+  const table = btn.closest('.table-with-actions').querySelector('table');
+  let csv = '\uFEFF';
+  table.querySelectorAll('tr').forEach(tr => {
+    const cells = Array.from(tr.querySelectorAll('td, th')).map(c => '"' + c.innerText.trim().replace(/"/g, '""') + '"');
+    if (cells.length > 0) csv += cells.join(',') + '\n';
+  });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'table_export.csv';
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+</script>
+</body>
+</html>

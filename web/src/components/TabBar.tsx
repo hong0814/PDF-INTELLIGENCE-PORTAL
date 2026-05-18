@@ -1,0 +1,98 @@
+import { type ReactNode, useMemo } from 'react';
+import { useAppStore, type TabId } from '../store/useAppStore';
+
+const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
+  {
+    id: 'main',
+    label: '메인',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+      </svg>
+    ),
+  },
+  {
+    id: 'document',
+    label: '문서 보기',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'search',
+    label: '표 검색',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 14h18m-9-4v8m-7-4h14M4 6h16" />
+      </svg>
+    ),
+  },
+  {
+    id: 'qa',
+    label: '텍스트 검색',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'credit',
+    label: '기업금융심사',
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
+      </svg>
+    ),
+  },
+];
+
+export default function TabBar() {
+  const activeTab = useAppStore((s) => s.activeTab);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
+  const tableQAs = useAppStore((s) => s.tableQAs);
+  const qaMessages = useAppStore((s) => s.qaMessages);
+  const hasSearchQA = useMemo(() => {
+    for (const items of Object.values(tableQAs)) {
+      if (items.some(item => !item.answer)) return true;
+    }
+    return false;
+  }, [tableQAs]);
+
+  const hasDocQA = useMemo(() => {
+    return qaMessages.some(m => m.isLoading);
+  }, [qaMessages]);
+
+  return (
+    <nav className="flex items-center border-b border-border bg-surface-elevated px-4">
+      {TABS.map((tab) => {
+        const isActive = activeTab === tab.id;
+        const showPending = (tab.id === 'search' && hasSearchQA) || (tab.id === 'qa' && hasDocQA);
+        return (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`
+              flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors relative
+              ${isActive
+                ? 'text-primary'
+                : 'text-text-muted hover:text-text-secondary'
+              }
+            `}
+          >
+            {tab.icon}
+            {tab.label}
+            {showPending && (
+              <span className="w-2 h-2 bg-accent rounded-full animate-pulse ml-0.5" />
+            )}
+            {isActive && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full" />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
