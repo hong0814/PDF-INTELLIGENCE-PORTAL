@@ -1,0 +1,98 @@
+"""Unified configuration for PDFTableSearch.
+
+Loads settings from environment variables and ``.env`` files using
+`pydantic-settings <https://docs.pydantic.dev/latest/concepts/pydantic_settings/>`_.
+Every field has a sensible default matching the existing hardcoded values
+scattered across the codebase so that the migration is fully backward-compatible.
+
+Usage::
+
+    from pdftablesearch.config import get_settings
+
+    settings = get_settings()
+    print(settings.zai_llm_model)
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Central configuration for PDFTableSearch.
+
+    All fields can be overridden via environment variables of the same name
+    (case-insensitive) or through a ``.env`` file in the project root.
+
+    Attributes are grouped by subsystem for readability.
+    """
+
+    # -- API Configuration ----------------------------------------------------
+
+    zai_api_key: Optional[str] = None
+    zai_embedding_endpoint: str = "https://api.z.ai/api/embeddings"
+    zai_embedding_model: str = "embedding-3"
+    zai_llm_endpoint: str = "https://api.z.ai/api/coding/paas/v4"
+    zai_llm_model: str = "glm-4.7"
+    zai_llm_rerank_model: str = "glm-4.7"
+
+    # -- Local Embeddings -----------------------------------------------------
+
+    local_embedding_model: str = "BAAI/bge-m3"
+    embedding_device: str = "cpu"
+
+    # -- ChromaDB -------------------------------------------------------------
+
+    chroma_persist_dir: str = "./.chroma"
+    chroma_collection_name: str = "pdf_tables"
+
+    # -- Processing -----------------------------------------------------------
+
+    max_file_size_mb: int = 100
+    api_timeout_seconds: int = 30
+    api_max_retries: int = 3
+    embedding_batch_size: int = 20
+    parallel_workers: int = 4
+
+    # -- Search ---------------------------------------------------------------
+
+    smart_search_top_k: int = 20
+    reranker_top_k: int = 10
+    content_max_length: int = 500
+
+    # -- Caching --------------------------------------------------------------
+
+    cache_enabled: bool = True
+    cache_dir: str = "./.cache"
+    llm_cache_ttl_seconds: int = 86400
+
+    # -- Logging --------------------------------------------------------------
+
+    log_level: str = "INFO"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Singleton accessor
+# ---------------------------------------------------------------------------
+
+_settings: Optional[Settings] = None
+
+
+def get_settings() -> Settings:
+    """Return the cached :class:`Settings` singleton.
+
+    Creates the instance on the first call; subsequent calls return the
+    same object so that ``.env`` is parsed only once.
+    """
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings

@@ -1,0 +1,1622 @@
+"""FastAPI web server for PDFTableSearch React frontend.
+
+Session-based API that replaces the Streamlit app. Each user session gets
+its own temporary upload directory and ChromaDB persist directory.
+
+Run with::
+
+    uvicorn pdftablesearch.web_server:app --reload --port 8000
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import tempfile
+import time
+import uuid
+import asyncio
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
+from starlette.responses import StreamingResponse
+
+from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
+from pdftablesearch.llm_client import ZaiLLMClient
+from pdftablesearch.translation import translate_html
+import os
+
+os.environ["HF_HUB_OFFLINE"] = "1"
+
+from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
+from pdftablesearch.models import TableSearchResult
+from pdftablesearch.vectorstore import TableVectorStore
+
+_sessions: Dict[str, dict] = {}
+_embeddings: Optional[SentenceTransformerEmbeddings] = None
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    global _embeddings
+    # Clean up stale temp directories from previous runs
+    import glob as _glob
+    import shutil
+    for pattern in ["pdf_upload_*", "pdf_chroma_*", "pdf_docchunks_*"]:
+        for d in _glob.glob(os.path.join(tempfile.gettempdir(), pattern)):
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+    _embeddings = SentenceTransformerEmbeddings()
+    yield
+
+
+app = FastAPI(title="PDFTableSearch API", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _get_embeddings() -> SentenceTransformerEmbeddings:
+    return _embeddings
+
+
+class SearchRequest(BaseModel):
+    query: str
+    max_results: int = 5
+
+
+class SmartSearchRequest(BaseModel):
+    query: str
+    pdf_name: Optional[str] = None
+
+
+class QARequest(BaseModel):
+    question: str
+    table_html: str
+    table_title: Optional[str] = None
+
+
+class CalculateRequest(BaseModel):
+    table_id: str
+    question: str
+
+
+class CreateSessionRequest(BaseModel):
+    name: Optional[str] = None
+
+
+class UpdateSessionRequest(BaseModel):
+    name: str
+
+
+def _get_session(session_id: Optional[str]) -> dict:
+    if not session_id or session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = _sessions[session_id]
+    session["last_activity"] = datetime.now(timezone.utc).isoformat()
+    return session
+
+
+def _serialize_session_brief(session_id: str, session: dict) -> dict:
+    return {
+        "session_id": session_id,
+        "name": session.get("name", ""),
+        "created_at": session.get("created_at", ""),
+        "last_activity": session.get("last_activity", ""),
+        "pdf_count": len(session.get("pdfs", {})),
+        "total_pages": session.get("total_pages", 0),
+        "total_tables": sum(
+            info.get("table_count", 0) for info in session.get("pdfs", {}).values()
+        ),
+        "search_count": session.get("search_count", 0),
+        "qa_count": session.get("qa_count", 0),
+        "pdf_names": list(session.get("pdfs", {}).keys()),
+    }
+
+
+def _serialize_table(result: TableSearchResult) -> dict:
+    return {
+        "table_id": result.table_id,
+        "document_name": result.document_name,
+        "page_number": result.page_number,
+        "table_title": result.table_title,
+        "table_html": result.table_html,
+        "table_markdown": result.table_markdown,
+        "relevance_score": result.relevance_score,
+        "rerank_score": result.rerank_score,
+        "bounding_box": result.bounding_box,
+        "table_type": result.table_type or "기타",
+    }
+
+
+def _format_results(
+    search_results: list[tuple[Any, float]],
+) -> list[TableSearchResult]:
+    results: list[TableSearchResult] = []
+    for doc, score in search_results:
+        results.append(TableSearchResult.from_langchain_document(doc, score))
+    results.sort(key=lambda r: r.relevance_score or float("inf"))
+    return results
+
+
+def _find_table_html(session: dict, table_id: str) -> str:
+    """Find table HTML in session by table_id.
+
+    Searches through all uploaded PDFs and their extracted tables.
+    """
+    for _pdf_name, pdf_info in session.get("pdfs", {}).items():
+        for table in pdf_info.get("tables", []):
+            if table.get("table_id") == table_id:
+                html = table.get("table_html", "")
+                if html:
+                    return html
+    raise HTTPException(status_code=404, detail=f"Table '{table_id}' not found in session")
+
+
+def _transpose_table_html(html: str) -> str:
+    """Transpose an HTML table (swap rows and columns) using pandas."""
+    try:
+        dfs = pd.read_html(html)
+    except ValueError:
+        return html
+    if not dfs:
+        return html
+    df = dfs[0]
+    transposed = df.transpose()
+    return transposed.to_html(
+        index=False, header=False, classes="table table-bordered"
+    )
+
+
+def _classify_table_type(title: Optional[str], html: Optional[str]) -> str:
+    text = (title or "") + " " + (html or "")
+    text = text.lower()
+    if any(k in text for k in ["매출", "재무", "대차대조표", "재무상태표", "자산", "부채", "자본", "현금흐름"]):
+        return "재무제표"
+    if any(k in text for k in ["손익", "영업이익", "분기별", "매출액", "비용", "수익"]):
+        return "손익계산서"
+    if any(k in text for k in ["리스크", "위험", "부실", "연체", "부도", "npl", "연체율"]):
+        return "리스크"
+    if any(k in text for k in ["담보", "보증", "평가", "저당", "근저당", "부동산", "감정"]):
+        return "담보"
+    return "기타"
+
+
+def _tokenize_korean(text: str) -> list[str]:
+    """Simple tokenizer for Korean + English text."""
+    # Split on whitespace and punctuation, keep meaningful tokens
+    import re as _re
+    tokens = _re.findall(r'[가-힣]+|[a-zA-Z0-9]+', text.lower())
+    return tokens
+
+
+def _chunk_and_index_session(session_id: str) -> None:
+    import shutil
+
+    session = _sessions.get(session_id)
+    if not session:
+        return
+    if session.get("document_chunks_ready"):
+        return
+
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from rank_bm25 import BM25Okapi
+
+    PAGE_SEP_RE = re.compile(
+        r"<div[^>]*class=['\"][^'\"]*page-sep[^'\"]*['\"]"
+        r"[^>]*data-pn=['\"](\d+)['\"][^>]*>",
+        re.IGNORECASE,
+    )
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        separators=["\n\n", "\n", "。", ".", " ", ""],
+    )
+
+    all_chunks = []
+    all_metadatas = []
+
+    for pdf_name, pdf_info in session.get("pdfs", {}).items():
+        html_path = pdf_info.get("html_path")
+        if not html_path or not Path(html_path).exists():
+            continue
+
+        html_content = Path(html_path).read_text(encoding="utf-8")
+
+        # Split HTML by page separators to preserve page boundaries
+        parts = PAGE_SEP_RE.split(html_content)
+        if len(parts) <= 1:
+            # No page separators found; fall back to whole-document chunking
+            text = re.sub(r'<table[^>]*>.*?</table>', '', html_content, flags=re.DOTALL)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            if not text:
+                continue
+            pdf_page_count = pdf_info.get("page_count", 1)
+            chunks = splitter.split_text(text)
+            for i, chunk in enumerate(chunks):
+                page_estimate = max(1, int(i * pdf_page_count / max(len(chunks), 1)) + 1)
+                all_chunks.append(chunk)
+                all_metadatas.append({
+                    "source_pdf": pdf_name,
+                    "chunk_index": i,
+                    "page_number": page_estimate,
+                    "pdf_page_count": pdf_page_count,
+                })
+            continue
+
+        pdf_page_count = pdf_info.get("page_count", 1)
+
+        # parts[0] is before the first separator (usually empty or title)
+        # After that, pairs of (page_number, page_html) from PAGE_SEP_RE.split
+        for pi in range(1, len(parts), 2):
+            page_num_str = parts[pi]
+            page_html = parts[pi + 1] if pi + 1 < len(parts) else ""
+            page_num = int(page_num_str)
+
+            text = re.sub(r'<table[^>]*>.*?</table>', '', page_html, flags=re.DOTALL)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            if not text:
+                continue
+
+            page_chunks = splitter.split_text(text)
+            for ci, chunk in enumerate(page_chunks):
+                all_chunks.append(chunk)
+                all_metadatas.append({
+                    "source_pdf": pdf_name,
+                    "chunk_index": len(all_metadatas),
+                    "page_number": page_num,
+                    "pdf_page_count": pdf_page_count,
+                })
+
+    if not all_chunks:
+        return
+
+    old_dir = session.get("doc_chunks_dir", "")
+    new_dir = tempfile.mkdtemp(prefix="pdf_docchunks_")
+    session["doc_chunks_dir"] = new_dir
+
+    embeddings = _get_embeddings()
+
+    vector_store = TableVectorStore(
+        embeddings=embeddings,
+        persist_dir=new_dir,
+        collection_name=f"doc_chunks_{session_id}",
+    )
+
+    docs = []
+    for chunk, meta in zip(all_chunks, all_metadatas):
+        from langchain_core.documents import Document
+
+        docs.append(Document(page_content=chunk, metadata=meta))
+
+    vector_store.add_documents(docs, skip_existing=False)
+
+    # Build BM25 index for keyword search
+    tokenized_corpus = [_tokenize_korean(chunk) for chunk in all_chunks]
+    bm25 = BM25Okapi(tokenized_corpus)
+    session["bm25_index"] = bm25
+    session["bm25_chunks"] = all_chunks
+    session["bm25_metadatas"] = all_metadatas
+
+    session["document_chunks_ready"] = True
+
+    if old_dir and old_dir != new_dir:
+        try:
+            shutil.rmtree(old_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+@app.get("/api/sessions")
+async def list_sessions() -> JSONResponse:
+    sessions = [
+        _serialize_session_brief(sid, s) for sid, s in _sessions.items()
+    ]
+    return JSONResponse(content={"sessions": sessions, "total": len(sessions)})
+
+
+@app.post("/api/sessions")
+async def create_session(body: CreateSessionRequest) -> JSONResponse:
+    session_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+    upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
+    chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
+
+    session: Dict[str, Any] = {
+        "upload_dir": upload_dir,
+        "chroma_dir": chroma_dir,
+        "pdfs": {},
+        "searcher": None,
+        "name": body.name or "",
+        "created_at": now,
+        "last_activity": now,
+        "total_pages": 0,
+        "search_count": 0,
+        "qa_count": 0,
+    }
+    _sessions[session_id] = session
+
+    return JSONResponse(
+        content={"session_id": session_id, "name": session["name"]},
+        status_code=201,
+    )
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: str) -> JSONResponse:
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = _sessions[session_id]
+    return JSONResponse(content=_serialize_session_brief(session_id, session))
+
+
+@app.put("/api/sessions/{session_id}")
+async def update_session(session_id: str, body: UpdateSessionRequest) -> JSONResponse:
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = _sessions[session_id]
+    session["name"] = body.name
+    session["last_activity"] = datetime.now(timezone.utc).isoformat()
+    return JSONResponse(content=_serialize_session_brief(session_id, session))
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str) -> JSONResponse:
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = _sessions.pop(session_id)
+    upload_dir = session.get("upload_dir")
+    chroma_dir = session.get("chroma_dir")
+    if upload_dir:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+    if chroma_dir:
+        shutil.rmtree(chroma_dir, ignore_errors=True)
+    return JSONResponse(content={"deleted": session_id})
+
+
+@app.get("/api/documents/pdf")
+async def get_document_pdf(
+    name: str,
+    session_id: Optional[str] = None,
+    x_session_id: Optional[str] = Header(None),
+):
+    from starlette.responses import FileResponse
+    sid = session_id or x_session_id
+    session = _get_session(sid)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+    pdf_path = session["pdfs"][name].get("path")
+    if not pdf_path or not Path(pdf_path).exists():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+    return FileResponse(Path(pdf_path), media_type="application/pdf")
+
+
+@app.get("/api/documents/page-image")
+async def get_page_image(
+    name: str,
+    page: int = 1,
+    dpi: int = 150,
+    session_id: Optional[str] = None,
+    x_session_id: Optional[str] = Header(None),
+):
+    """Render a specific PDF page as a PNG image using PyMuPDF."""
+    from starlette.responses import Response
+    import fitz
+
+    sid = session_id or x_session_id
+    session = _get_session(sid)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found")
+    pdf_path = session["pdfs"][name].get("path")
+    if not pdf_path or not Path(pdf_path).exists():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+
+    try:
+        doc = fitz.open(pdf_path)
+        page_idx = max(0, min(page - 1, len(doc) - 1))
+        pdf_page = doc[page_idx]
+        zoom = dpi / 72
+        mat = fitz.Matrix(zoom, zoom)
+        pix = pdf_page.get_pixmap(matrix=mat)
+        png_bytes = pix.tobytes("png")
+        doc.close()
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to render page: {exc}")
+
+@app.get("/api/documents/text")
+async def get_document_text(
+    name: str,
+    session_id: Optional[str] = None,
+    x_session_id: Optional[str] = Header(None),
+):
+    import re
+    from starlette.responses import Response
+    sid = session_id or x_session_id
+    session = _get_session(sid)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+    html_path = session["pdfs"][name].get("html_path")
+    if not html_path or not Path(html_path).exists():
+        raise HTTPException(status_code=404, detail="HTML content not available")
+    html = Path(html_path).read_text(encoding="utf-8")
+    text = re.sub(r'<[^>]+>', '', html)
+    text = re.sub(r'\s+', ' ', text).strip()
+    output_name = Path(name).stem
+    return Response(
+        content=text,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{output_name}.txt"'},
+    )
+
+@app.get("/api/documents/markdown")
+async def get_document_markdown(
+    name: str,
+    session_id: Optional[str] = None,
+    x_session_id: Optional[str] = Header(None),
+):
+    from starlette.responses import Response
+    sid = session_id or x_session_id
+    session = _get_session(sid)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+    md_path = session["pdfs"][name].get("md_path")
+    if not md_path or not Path(md_path).exists():
+        raise HTTPException(status_code=404, detail="Markdown content not available")
+    content = Path(md_path).read_text(encoding="utf-8")
+    output_name = Path(name).stem
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{output_name}.md"'},
+    )
+
+@app.get("/api/documents/tables")
+async def get_document_tables(
+    name: str,
+    session_id: Optional[str] = None,
+    x_session_id: Optional[str] = Header(None),
+):
+    sid = session_id or x_session_id
+    session = _get_session(sid)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+    tables = session["pdfs"][name].get("tables", [])
+    return JSONResponse(content={"tables": tables})
+
+@app.get("/api/documents/html")
+async def get_document_html(
+    name: str,
+    x_session_id: Optional[str] = Header(None),
+) -> HTMLResponse:
+    session = _get_session(x_session_id)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+
+    html_path = session["pdfs"][name].get("html_path")
+    if not html_path or not Path(html_path).exists():
+        upload_dir = session.get("upload_dir", "")
+        if upload_dir:
+            upload_root = Path(upload_dir)
+            for candidate in upload_root.rglob("*.html"):
+                html_path = str(candidate)
+                session["pdfs"][name]["html_path"] = html_path
+                break
+
+    if not html_path or not Path(html_path).exists():
+        raise HTTPException(status_code=404, detail=f"HTML content not available for '{name}'")
+    html_content = Path(html_path).read_text(encoding="utf-8")
+    return HTMLResponse(content=html_content)
+
+
+@app.get("/api/documents/images")
+async def get_document_images(
+    name: str,
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    """Extract images from PDF's HTML with surrounding context text.
+
+    Converts the PDF with ``image_output="embedded"`` if not already done,
+    then parses the HTML to find all ``<img>`` tags with their alt text,
+    preceding/following text context, and page number.
+    """
+    session = _get_session(x_session_id)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+
+    pdf_info = session["pdfs"][name]
+
+    # Check if we already have an embedded-HTML version
+    embedded_html_path = pdf_info.get("embedded_html_path")
+    if not embedded_html_path or not Path(embedded_html_path).exists():
+        # Convert PDF with embedded images
+        import opendataloader_pdf
+
+        pdf_path = pdf_info["path"]
+        output_dir = str(Path(pdf_path).parent / Path(name).stem / "_embedded")
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        try:
+            opendataloader_pdf.convert(
+                input_path=str(pdf_path),
+                output_dir=output_dir,
+                format="html",
+                image_output="embedded",
+                image_format="png",
+                html_page_separator="<div class='page-sep' data-pn='%page-number%'></div>",
+            )
+        except TypeError:
+            try:
+                opendataloader_pdf.convert(
+                    input_path=str(pdf_path),
+                    output_dir=output_dir,
+                    format="html",
+                    image_output="embedded",
+                    html_page_separator="<div class='page-sep' data-pn='%page-number%'></div>",
+                )
+            except TypeError:
+                try:
+                    opendataloader_pdf.convert(
+                        input_path=str(pdf_path),
+                        output_dir=output_dir,
+                        format="html",
+                        image_output="embedded",
+                    )
+                except Exception as exc:
+                    raise HTTPException(status_code=500, detail=f"PDF image extraction failed: {exc}")
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"PDF image extraction failed: {exc}")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"PDF image extraction failed: {exc}")
+
+        html_files = list(Path(output_dir).glob("*.html"))
+        if not html_files:
+            return JSONResponse(content={"images": [], "total": 0})
+
+        embedded_html_path = str(html_files[0])
+        session["pdfs"][name]["embedded_html_path"] = embedded_html_path
+
+    from bs4 import BeautifulSoup, NavigableString
+    import base64
+
+    page_sep_re = re.compile(
+        r"<div[^>]*class=['\"][^'\"]*page-sep[^'\"]*['\"]"
+        r"[^>]*data-pn=['\"](\d+)['\"][^>]*>",
+        re.IGNORECASE,
+    )
+
+    # Use the ORIGINAL HTML (which has page separators) for page mapping,
+    # and collect image data from the EMBEDDED HTML.
+    # Build a map: alt -> embedded image src (base64 data URI)
+    embedded_content = Path(embedded_html_path).read_text(encoding="utf-8")
+    embedded_soup = BeautifulSoup(embedded_content, "html.parser")
+    embedded_img_map: dict[str, str] = {}
+    for eimg in embedded_soup.find_all("img"):
+        alt = eimg.get("alt", "")
+        src = eimg.get("src", "")
+        if alt and src:
+            embedded_img_map[alt] = src
+
+    # Also collect image data from the ORIGINAL HTML (external image files)
+    # and build a combined map: alt -> base64 data URI
+    original_html_path = pdf_info.get("html_path")
+    original_content = ""
+    original_soup = None
+    if original_html_path and Path(original_html_path).exists():
+        original_content = Path(original_html_path).read_text(encoding="utf-8")
+        original_soup = BeautifulSoup(original_content, "html.parser")
+
+        # Load external images and convert to base64
+        original_dir = Path(original_html_path).parent
+        for oimg in original_soup.find_all("img"):
+            alt = oimg.get("alt", "")
+            src = oimg.get("src", "")
+            if alt and src and not src.startswith("data:"):
+                img_file = original_dir / src
+                if img_file.exists():
+                    img_bytes = img_file.read_bytes()
+                    b64 = base64.b64encode(img_bytes).decode("ascii")
+                    suffix = img_file.suffix.lstrip(".") or "png"
+                    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(suffix, "image/png")
+                    data_uri = f"data:{mime};base64,{b64}"
+                    # Prefer embedded version if available, else use file version
+                    if alt not in embedded_img_map:
+                        embedded_img_map[alt] = data_uri
+
+    # Use original HTML for parsing (has page separators and all images)
+    parse_content = original_content or embedded_content
+    parse_soup = original_soup or embedded_soup
+
+    img_tags = parse_soup.find_all("img")
+
+    images = []
+    for idx, img in enumerate(img_tags):
+        alt = img.get("alt", f"Image {idx + 1}")
+
+        # Get the actual image data from our combined map
+        src = embedded_img_map.get(alt, img.get("src", ""))
+
+        # Skip tiny tracking/spacer images (data URIs shorter than ~500 chars are likely spacers)
+        if src.startswith("data:") and len(src) < 500:
+            continue
+        # Skip if no image data available
+        if not src:
+            continue
+
+        # Find preceding meaningful text — check siblings, then parent's siblings
+        prev_text = ""
+        # First check direct siblings of the image
+        for sib in img.previous_siblings:
+            if isinstance(sib, NavigableString):
+                t = sib.strip()
+                if t and len(t) > 2:
+                    prev_text = t[-200:]
+                    break
+            elif hasattr(sib, "get_text"):
+                t = sib.get_text(strip=True)
+                if t and len(t) > 2:
+                    prev_text = t[-200:]
+                    break
+        # If no text found, check parent's siblings (e.g., <figure> wrapping <img>)
+        if not prev_text and img.parent and img.parent.name in ("figure", "div", "span"):
+            for sib in img.parent.previous_siblings:
+                if isinstance(sib, NavigableString):
+                    t = sib.strip()
+                    if t and len(t) > 2:
+                        prev_text = t[-200:]
+                        break
+                elif hasattr(sib, "get_text"):
+                    t = sib.get_text(strip=True)
+                    if t and len(t) > 2:
+                        prev_text = t[-200:]
+                        break
+
+        # Find following meaningful text — same approach
+        next_text = ""
+        for sib in img.next_siblings:
+            if isinstance(sib, NavigableString):
+                t = sib.strip()
+                if t and len(t) > 2:
+                    next_text = t[:200]
+                    break
+            elif hasattr(sib, "get_text"):
+                t = sib.get_text(strip=True)
+                if t and len(t) > 2:
+                    next_text = t[:200]
+                    break
+        if not next_text and img.parent and img.parent.name in ("figure", "div", "span"):
+            for sib in img.parent.next_siblings:
+                if isinstance(sib, NavigableString):
+                    t = sib.strip()
+                    if t and len(t) > 2:
+                        next_text = t[:200]
+                        break
+                elif hasattr(sib, "get_text"):
+                    t = sib.get_text(strip=True)
+                    if t and len(t) > 2:
+                        next_text = t[:200]
+                        break
+
+        # Check if inside a table
+        parent_table = img.find_parent("table")
+        table_context = None
+        if parent_table:
+            parent_td = img.find_parent("td") or img.find_parent("th")
+            cell_text = parent_td.get_text(strip=True)[:200] if parent_td else ""
+            caption = parent_table.find("caption")
+            caption_text = caption.get_text(strip=True)[:200] if caption else ""
+            table_context = {"cell_text": cell_text, "caption": caption_text}
+
+        # Determine page number from parse_content (original HTML has page separators)
+        page_num = 1
+        alt_attr = img.get("alt", "")
+        if alt_attr and parse_content:
+            # Search for the image tag by alt attribute in raw HTML
+            alt_pattern = re.compile(
+                rf'<img[^>]*alt=[\'"]{re.escape(alt_attr)}[\'"][^>]*>',
+                re.IGNORECASE,
+            )
+            alt_match = alt_pattern.search(parse_content)
+            if alt_match:
+                img_pos = alt_match.start()
+                # Find the last page-sep before this image's position
+                for sep_match in page_sep_re.finditer(parse_content):
+                    if sep_match.start() < img_pos:
+                        page_num = int(sep_match.group(1))
+
+        images.append({
+            "index": idx,
+            "alt": alt,
+            "src": src,
+            "prev_text": prev_text,
+            "next_text": next_text,
+            "page": page_num,
+            "in_table": parent_table is not None,
+            "table_context": table_context,
+        })
+
+    # Generate page images via PyMuPDF (full page, moderate DPI)
+    pdf_path = pdf_info["path"]
+    import fitz as _fitz
+
+    _doc = _fitz.open(pdf_path)
+    page_image_cache: dict[int, str] = {}
+
+    zoom = 150 / 72  # 150 DPI — readable but not oversized
+    mat = _fitz.Matrix(zoom, zoom)
+
+    for img_entry in images:
+        pn = img_entry["page"]
+        if pn not in page_image_cache:
+            page_idx = max(0, min(pn - 1, len(_doc) - 1))
+            pdf_page = _doc[page_idx]
+            pix = pdf_page.get_pixmap(matrix=mat)
+            png_bytes = pix.tobytes("png")
+            b64 = base64.b64encode(png_bytes).decode("ascii")
+            page_image_cache[pn] = f"data:image/png;base64,{b64}"
+        img_entry["page_image_src"] = page_image_cache[pn]
+
+    _doc.close()
+
+    return JSONResponse(content={"images": images, "total": len(images)})
+
+
+@app.post("/api/upload")
+async def upload_pdfs(
+    files: List[UploadFile] = File(...),
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    session_id = x_session_id or uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+
+    if session_id in _sessions:
+        session = _sessions[session_id]
+        upload_dir = session["upload_dir"]
+        chroma_dir = session["chroma_dir"]
+    else:
+        upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
+        chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
+        doc_chunks_dir = tempfile.mkdtemp(prefix="pdf_docchunks_")
+        session: Dict[str, Any] = {
+            "upload_dir": upload_dir,
+            "chroma_dir": chroma_dir,
+            "doc_chunks_dir": doc_chunks_dir,
+            "pdfs": {},
+            "searcher": None,
+            "name": "",
+            "created_at": now,
+            "last_activity": now,
+            "total_pages": 0,
+            "search_count": 0,
+            "qa_count": 0,
+        }
+        _sessions[session_id] = session
+
+    session_has_existing_pdfs = len(session.get("pdfs", {})) > 0
+
+    pdf_results: Dict[str, dict] = {}
+    total_tables = 0
+    all_docs: list = []
+
+    for upload in files:
+        filename = upload.filename
+        if not filename:
+            continue
+
+        dest = Path(upload_dir) / filename
+        with open(dest, "wb") as f:
+            content = await upload.read()
+            f.write(content)
+
+        try:
+            pdf_output_dir = str(Path(upload_dir) / Path(filename).stem)
+            processor = PDFProcessor()
+            processor.load_documents(str(dest), use_hybrid=True, output_dir=pdf_output_dir)
+            documents = processor.get_documents()
+
+            html_path: Optional[str] = None
+            md_path: Optional[str] = None
+            page_count: int = 0
+            conv_dir = Path(pdf_output_dir)
+            if conv_dir.exists():
+                html_files = list(conv_dir.rglob("*.html"))
+                if html_files:
+                    html_path = str(html_files[0])
+                md_files = list(conv_dir.rglob("*.md"))
+                if md_files:
+                    md_path = str(md_files[0])
+
+            if documents:
+                max_page = max((doc.metadata.get("page_number", 0) for doc in documents), default=0)
+                page_count = max_page
+        except Exception as exc:
+            pdf_results[filename] = {
+                "table_count": 0,
+                "error": str(exc),
+            }
+            continue
+
+        table_count = len(documents)
+        total_tables += table_count
+        all_docs.extend(documents)
+
+        session["pdfs"][filename] = {
+            "path": str(dest),
+            "table_count": table_count,
+            "html_path": html_path,
+            "md_path": md_path,
+            "page_count": page_count,
+            "tables": [
+                TableSearchResult.from_langchain_document(doc, 0.0).to_dict()
+                for doc in documents
+            ],
+        }
+
+        for table in session["pdfs"][filename]["tables"]:
+            table["table_type"] = _classify_table_type(
+                table.get("table_title"), table.get("table_html")
+            )
+
+        pdf_results[filename] = {
+            "table_count": table_count,
+            "page_count": page_count,
+        }
+
+    session["total_pages"] = sum(
+        info.get("page_count", 0) for info in session["pdfs"].values()
+    )
+    session["last_activity"] = now
+    session["document_chunks_ready"] = False
+
+    try:
+        _chunk_and_index_session(session_id)
+    except Exception:
+        pass
+
+    if total_tables > 0 and all_docs:
+        embeddings = _get_embeddings()
+        vector_store = TableVectorStore(
+            embeddings=embeddings,
+            persist_dir=chroma_dir,
+        )
+        # Only reset if this is a fresh session (no existing PDFs before this upload)
+        if not session_has_existing_pdfs:
+            try:
+                vector_store.reset()
+            except Exception:
+                pass
+        vector_store.add_documents(all_docs)
+
+    _sessions[session_id] = session
+
+    return JSONResponse(
+        content={
+            "session_id": session_id,
+            "pdfs": pdf_results,
+            "total_tables": total_tables,
+            "total_pages": sum(info.get("page_count", 0) for info in session["pdfs"].values()),
+        }
+    )
+
+
+@app.get("/api/pdfs")
+async def list_pdfs(x_session_id: Optional[str] = Header(None)) -> JSONResponse:
+    session = _get_session(x_session_id)
+
+    pdfs = [
+        {"name": name, "table_count": info["table_count"], "page_count": info.get("page_count", 0)}
+        for name, info in session["pdfs"].items()
+    ]
+    total_tables = sum(info["table_count"] for info in session["pdfs"].values())
+    total_pages = sum(info.get("page_count", 0) for info in session["pdfs"].values())
+
+    return JSONResponse(content={"pdfs": pdfs, "total_tables": total_tables, "total_pages": total_pages})
+
+
+@app.delete("/api/pdfs/{filename}")
+async def delete_pdf(
+    filename: str,
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    session = _get_session(x_session_id)
+
+    if filename not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{filename}' not found in session")
+
+    pdf_info = session["pdfs"].pop(filename)
+    pdf_path = pdf_info.get("path")
+    if pdf_path:
+        Path(pdf_path).unlink(missing_ok=True)
+
+    pdfs = [
+        {"name": name, "table_count": info["table_count"]}
+        for name, info in session["pdfs"].items()
+    ]
+    total_tables = sum(info["table_count"] for info in session["pdfs"].values())
+
+    return JSONResponse(content={"pdfs": pdfs, "total_tables": total_tables})
+
+
+@app.post("/api/search")
+async def search(
+    body: SearchRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    session = _get_session(x_session_id)
+    session["search_count"] = session.get("search_count", 0) + 1
+    start = time.time()
+
+    chroma_dir = session["chroma_dir"]
+    if not session["pdfs"]:
+        return JSONResponse(
+            content={"results": [], "total": 0, "time_seconds": 0.0}
+        )
+
+    try:
+        embeddings = _get_embeddings()
+        vector_store = TableVectorStore(
+            embeddings=embeddings,
+            persist_dir=chroma_dir,
+        )
+
+        search_results = vector_store.similarity_search(
+            query=body.query,
+            k=body.max_results,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            content={"results": [], "total": 0, "time_seconds": 0.0, "error": f"Search failed: {exc}"}
+        )
+
+    elapsed = time.time() - start
+    results = [_serialize_table(r) for r in _format_results(search_results)]
+
+    return JSONResponse(
+        content={
+            "results": results,
+            "total": len(results),
+            "time_seconds": round(elapsed, 2),
+        }
+    )
+
+
+@app.post("/api/smart-search")
+async def smart_search_endpoint(
+    body: SmartSearchRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+    session["search_count"] = session.get("search_count", 0) + 1
+
+    pdf_name = body.pdf_name
+    if pdf_name and pdf_name in session["pdfs"]:
+        pdf_path = session["pdfs"][pdf_name]["path"]
+    else:
+        if not session["pdfs"]:
+            raise HTTPException(status_code=400, detail="No PDFs uploaded in this session")
+        first_pdf = next(iter(session["pdfs"].values()))
+        pdf_path = first_pdf["path"]
+
+    chroma_dir = session["chroma_dir"]
+    queue: list[str] = []
+
+    def progress_callback(phase: str, message: str, pct: int) -> None:
+        event_data = json.dumps(
+            {"phase": phase, "message": message, "pct": pct},
+            ensure_ascii=False,
+        )
+        queue.append(f"event: progress\ndata: {event_data}\n\n")
+
+    def generate():
+        try:
+            embeddings = _get_embeddings()
+            vector_store = TableVectorStore(
+                embeddings=embeddings,
+                persist_dir=chroma_dir,
+            )
+
+            progress_callback("vector", "벡터 검색 중...", 20)
+            raw_results = vector_store.similarity_search(query=body.query, k=20)
+            candidates = _format_results(raw_results)
+
+            if not candidates:
+                for evt in queue:
+                    yield evt
+                error_data = json.dumps(
+                    {"error": "검색 결과가 없습니다."}, ensure_ascii=False,
+                )
+                yield f"event: error\ndata: {error_data}\n\n"
+                return
+
+            progress_callback("vector", f"벡터 검색 완료: {len(candidates)}개 후보", 50)
+
+            if len(candidates) == 1:
+                progress_callback("done", "검색 완료 (후보 1개)", 100)
+                for evt in queue:
+                    yield evt
+                result_data = json.dumps(
+                    {"result": _serialize_table(candidates[0]), "vector_results": []},
+                    ensure_ascii=False,
+                )
+                yield f"event: result\ndata: {result_data}\n\n"
+                return
+
+            progress_callback("llm", f"AI 분석 중... ({len(candidates)}개 후보 평가)", 70)
+
+            from pdftablesearch.smart_search import _prepare_candidates, _run_llm_selection
+            selected = _run_llm_selection(
+                query=body.query,
+                candidates_results=candidates,
+                llm_model="glm-4.7",
+                api_key=None,
+            )
+
+            if selected is None:
+                selected = candidates[0]
+                progress_callback("done", "AI 실패, 벡터 검색 결과로 대체", 100)
+            else:
+                progress_callback("done", "AI 선택 완료!", 100)
+
+            for evt in queue:
+                yield evt
+
+            vector_extras = [
+                _serialize_table(r)
+                for r in candidates
+                if r.table_id != selected.table_id
+            ][:2]
+
+            result_data = json.dumps(
+                {
+                    "result": _serialize_table(selected),
+                    "vector_results": vector_extras,
+                },
+                ensure_ascii=False,
+            )
+            yield f"event: result\ndata: {result_data}\n\n"
+
+        except Exception as exc:
+            for evt in queue:
+                yield evt
+            error_data = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/qa")
+async def qa(
+    body: QARequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+    session["qa_count"] = session.get("qa_count", 0) + 1
+
+    import hashlib
+    table_id_key = body.table_title or hashlib.md5(body.table_html[:200].encode()).hexdigest()
+    qa_key = hashlib.md5(f"{table_id_key}:{body.question}".encode()).hexdigest()
+    sid = x_session_id
+
+    if "qa_results" not in session:
+        session["qa_results"] = {}
+    session["qa_results"][qa_key] = {"question": body.question, "answer": "", "done": False, "table_id": table_id_key}
+
+    table_title = body.table_title or "(제목 없음)"
+    today = date.today()
+
+    transpose_keywords = ["가로", "세로", "축을 변경", "transpose", "바꿔", "행과 열", "열과 행", "가로축", "세로축"]
+    is_transpose = any(kw in body.question for kw in transpose_keywords)
+
+    if is_transpose and body.table_html:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(body.table_html, "html.parser")
+        table = soup.find("table")
+        if table:
+            rows = table.find_all("tr")
+            matrix = []
+            for row in rows:
+                cells = [cell.get_text(strip=True) for cell in row.find_all(["th", "td"])]
+                if cells:
+                    matrix.append(cells)
+
+            if matrix:
+                col_count = max(len(r) for r in matrix)
+                for r in matrix:
+                    r.extend([""] * (col_count - len(r)))
+
+                transposed = list(zip(*matrix))
+
+                md_lines = []
+                header = "| " + " | ".join(str(c) if c else " " for c in transposed[0]) + " |"
+                separator = "|" + "|".join("---" for _ in transposed[0]) + "|"
+                md_lines = [header, separator]
+                for row in transposed[1:]:
+                    md_lines.append("| " + " | ".join(str(c) if c else " " for c in row) + " |")
+
+                transposed_md = "\n".join(md_lines)
+
+                done_key = qa_key
+                session["qa_results"][done_key]["answer"] = f"표의 가로/세로축을 변경하였습니다:\n\n{transposed_md}"
+                session["qa_results"][done_key]["done"] = True
+
+                async def direct_transpose_response():
+                    yield f"data: {json.dumps({'done': True, 'qa_key': qa_key}, ensure_ascii=False)}\n\n"
+
+                return StreamingResponse(
+                    direct_transpose_response(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+    system_prompt = (
+        f"You are a data analyst assistant. "
+        f"Given a user question and an HTML table, "
+        f"provide a clear, accurate answer in Korean.\n\n"
+        f"Today is {today}.\n\n"
+        f"Rules:\n"
+        f"1. Answer based ONLY on the provided table data\n"
+        f"2. Use specific numbers from the table when possible\n"
+        f"3. If the table doesn't contain enough information, say so clearly\n"
+        f"4. Respond in Korean"
+    )
+
+    user_prompt = (
+        f"User Question: {body.question}\n\n"
+        f"Table (HTML):\n{body.table_html[:4000]}\n\n"
+        f"Table Title: {table_title}\n\n"
+        f"Answer:"
+    )
+
+    result_queue: asyncio.Queue = asyncio.Queue()
+
+    async def background_llm():
+        client = ZaiLLMClient(max_retries=6)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        accumulated = ""
+        try:
+            for chunk in client._llm.stream(messages):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    accumulated += token
+                    session["qa_results"][qa_key]["answer"] = accumulated
+                    await result_queue.put(token)
+            session["qa_results"][qa_key]["done"] = True
+        except Exception as exc:
+            session["qa_results"][qa_key]["answer"] = f"오류: {exc}"
+            session["qa_results"][qa_key]["done"] = True
+        await result_queue.put(None)
+
+    asyncio.create_task(background_llm())
+
+    async def sse_generate():
+        while True:
+            try:
+                token = await asyncio.wait_for(result_queue.get(), timeout=0.3)
+                if token is None:
+                    yield f"data: {json.dumps({'done': True, 'qa_key': qa_key}, ensure_ascii=False)}\n\n"
+                    break
+                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            except asyncio.TimeoutError:
+                if session["qa_results"][qa_key]["done"]:
+                    yield f"data: {json.dumps({'done': True, 'qa_key': qa_key}, ensure_ascii=False)}\n\n"
+                    break
+
+    return StreamingResponse(
+        sse_generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/qa-results")
+async def get_qa_results(
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    session = _get_session(x_session_id)
+    results = []
+    for qa_key, qa_data in session.get("qa_results", {}).items():
+        results.append({
+            "qa_key": qa_key,
+            "question": qa_data["question"],
+            "answer": qa_data["answer"],
+            "done": qa_data["done"],
+        })
+    return JSONResponse(content={"results": results})
+
+
+@app.get("/api/health")
+async def health() -> JSONResponse:
+    return JSONResponse(content={"status": "ok", "sessions": len(_sessions)})
+
+
+@app.post("/api/table-transpose/{table_id}")
+async def table_transpose(
+    table_id: str,
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    session = _get_session(x_session_id)
+    html = _find_table_html(session, table_id)
+    transposed_html = _transpose_table_html(html)
+    return JSONResponse(content={"html": transposed_html})
+
+
+@app.post("/api/table-calculate")
+async def table_calculate(
+    body: CalculateRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+    table_html = _find_table_html(session, body.table_id)
+
+    try:
+        dfs = pd.read_html(table_html)
+        df = dfs[0] if dfs else None
+    except ValueError:
+        df = None
+
+    if df is None:
+        raise HTTPException(status_code=422, detail="Could not parse table data")
+
+    csv_summary = df.to_csv(index=False)
+    column_info = json.dumps(df.dtypes.apply(str).to_dict(), ensure_ascii=False)
+
+    system_prompt = (
+        "You are a data analyst. Given a table (CSV) and a question, "
+        "perform the requested calculation and respond in JSON with two fields: "
+        '"result" (the numeric answer as a string) and "explanation" (a brief '
+        "Korean explanation of how you calculated it).\n\n"
+        "Rules:\n"
+        "1. Base your answer ONLY on the provided table data\n"
+        "2. Show the calculation steps in the explanation\n"
+        "3. Respond in valid JSON: {\"result\": \"...\", \"explanation\": \"...\"}\n"
+        "4. Keep the explanation concise (1-2 sentences)"
+    )
+
+    user_prompt = (
+        f"Question: {body.question}\n\n"
+        f"Column types: {column_info}\n\n"
+        f"Table data (CSV):\n{csv_summary[:4000]}\n\n"
+        f"Answer:"
+    )
+
+    def generate():
+        try:
+            client = ZaiLLMClient(max_retries=6)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            for chunk in client._llm.stream(messages):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    data = json.dumps({"token": token}, ensure_ascii=False)
+                    yield f"data: {data}\n\n"
+            yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            data = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+class AskDocumentRequest(BaseModel):
+    question: str
+
+
+@app.post("/api/ask-document")
+async def ask_document(
+    body: AskDocumentRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+    session["qa_count"] = session.get("qa_count", 0) + 1
+
+    if not session.get("document_chunks_ready"):
+        _chunk_and_index_session(x_session_id)
+
+    embeddings = _get_embeddings()
+
+    vector_store = TableVectorStore(
+        embeddings=embeddings,
+        persist_dir=session["doc_chunks_dir"],
+        collection_name=f"doc_chunks_{x_session_id}",
+    )
+
+    query = body.question
+    k = 8  # retrieve more candidates for fusion
+
+    # --- Vector search ---
+    vector_results = vector_store.similarity_search(query=query, k=k)
+    # vector_results: list of (Document, score)
+
+    # --- BM25 keyword search ---
+    bm25 = session.get("bm25_index")
+    bm25_chunks = session.get("bm25_chunks", [])
+    bm25_metadatas = session.get("bm25_metadatas", [])
+
+    bm25_results: list[tuple[int, float]] = []
+    if bm25 and bm25_chunks:
+        tokenized_query = _tokenize_korean(query)
+        scores = bm25.get_scores(tokenized_query)
+        # Get top-k indices sorted by score
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+        bm25_results = [(idx, scores[idx]) for idx in top_indices if scores[idx] > 0]
+
+    # --- Reciprocal Rank Fusion ---
+    # Merge vector + BM25 results using RRF
+    rrf_k = 60  # constant for RRF
+    rrf_scores: dict[int, float] = {}
+
+    for rank, (doc, _score) in enumerate(vector_results):
+        # Find chunk index by matching content
+        chunk_text = doc.page_content
+        for idx, c in enumerate(bm25_chunks):
+            if c == chunk_text:
+                rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                break
+        else:
+            # Not found in bm25_chunks, add as new entry
+            idx = len(bm25_chunks)
+            bm25_chunks.append(chunk_text)
+            bm25_metadatas.append(doc.metadata)
+            rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+
+    for rank, (idx, _score) in enumerate(bm25_results):
+        rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+
+    # Sort by RRF score, take top 5
+    fused_indices = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:5]
+
+    contexts = []
+    sources = []
+    for idx in fused_indices:
+        chunk_text = bm25_chunks[idx]
+        meta = bm25_metadatas[idx] if idx < len(bm25_metadatas) else {}
+        contexts.append(chunk_text)
+        sources.append({
+            "pdf": meta.get("source_pdf", ""),
+            "chunk_index": meta.get("chunk_index", 0),
+            "page_number": meta.get("page_number", 1),
+            "pdf_page_count": meta.get("pdf_page_count", 1),
+            "text": chunk_text,
+        })
+
+    context_text = "\n\n---\n\n".join(
+        f"[출처{i+1}] {c}" for i, c in enumerate(contexts)
+    )
+
+    system_prompt = (
+        "당신은 전문적인 금융 문서 분석 어시스턴트입니다. 아래 [출처N]으로 표시된 문서 내용만을 기반으로 질문에 답변하세요.\n\n"
+        "규칙:\n"
+        "1. 문서에 없는 내용은 추측하지 마세요\n"
+        "2. 구체적인 수치, 날짜, 업체명 등을 정확히 인용하세요\n"
+        "3. 한국어로 답변하세요\n"
+        "4. 충분히 상세하게 답변하세요. 수치가 있다면 구체적인 값을 포함하고, 추이나 변화가 있다면 그 내용도 함께 설명하세요\n"
+        "5. 실제 답변에 사용한 출처 번호만 답변 마지막 줄에 '사용출처: 1,3' 형식으로 반드시 표시하세요"
+    )
+
+    user_prompt = (
+        f"질문: {body.question}\n\n"
+        f"참고 문서 내용:\n{context_text[:6000]}\n\n"
+        f"답변:"
+    )
+
+    def generate():
+        try:
+            import time as _time
+            client = ZaiLLMClient(max_retries=2)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            # Retry loop for 429 rate limit
+            max_attempts = 5
+            accumulated = ""
+            for attempt in range(max_attempts):
+                try:
+                    for chunk in client._llm.stream(messages):
+                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                        if token:
+                            accumulated += token
+                            data = json.dumps({"token": token}, ensure_ascii=False)
+                            yield f"data: {data}\n\n"
+                    break  # success, exit retry loop
+                except Exception as stream_exc:
+                    err_msg = str(stream_exc)
+                    if "429" in err_msg and attempt < max_attempts - 1:
+                        wait = 15 * (attempt + 1)
+                        yield f"data: {json.dumps({'token': f'[재시도 중... {wait}초 대기 ({attempt+1}/{max_attempts})]'}, ensure_ascii=False)}\n\n"
+                        _time.sleep(wait)
+                        accumulated = ""
+                        continue
+                    raise
+
+            used_match = re.search(r'사용출처:\s*([\d,\s]+)', accumulated)
+            if used_match:
+                used_indices = [int(x.strip()) - 1 for x in used_match.group(1).split(',') if x.strip().isdigit()]
+                filtered_sources = [sources[i] for i in used_indices if 0 <= i < len(sources)]
+            else:
+                filtered_sources = sources
+
+            sources_data = json.dumps({"sources": filtered_sources}, ensure_ascii=False)
+            yield f"data: {sources_data}\n\n"
+
+            yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            data = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+class TranslateRequest(BaseModel):
+    pdf_name: str
+    source_lang: str = "ko"
+    target_lang: str = "en"
+
+
+@app.post("/api/translate")
+async def translate_document(
+    body: TranslateRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    """Translate PDF text to target language, streaming each chunk via SSE.
+
+    SSE events:
+        ``chunk_done`` — ``{"chunk", "total_chunks", "translated_text"}`
+        ``done``       — ``{"total_chunks", "full_text"}`
+        ``error``      — ``{"error"}`
+    """
+    session = _get_session(x_session_id)
+    if body.pdf_name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{body.pdf_name}' not found")
+
+    pdf_info = session["pdfs"][body.pdf_name]
+    html_path = pdf_info.get("html_path")
+    if not html_path or not Path(html_path).exists():
+        raise HTTPException(status_code=404, detail="HTML content not available")
+
+    import queue as _queue
+    import threading
+
+    from pdftablesearch.translation import translate_text_chunks
+
+    # Extract plain text from HTML
+    html = Path(html_path).read_text(encoding="utf-8")
+    import re as _re
+    text = _re.sub(r'<[^>]+>', ' ', html)
+    text = _re.sub(r'\s+', ' ', text).strip()
+
+    if not text:
+        raise HTTPException(status_code=400, detail="No text content found")
+
+    result_queue: _queue.Queue[dict] = _queue.Queue()
+
+    def _on_chunk_done(chunk_idx: int, total_chunks: int, translated_text: str) -> None:
+        result_queue.put({
+            "type": "chunk_done",
+            "chunk": chunk_idx,
+            "total_chunks": total_chunks,
+            "translated_text": translated_text,
+        })
+
+    def _run():
+        try:
+            full_text = translate_text_chunks(
+                text=text,
+                source_lang=body.source_lang,
+                target_lang=body.target_lang,
+                on_chunk_done=_on_chunk_done,
+            )
+            result_queue.put({"type": "done", "full_text": full_text})
+        except Exception as exc:
+            result_queue.put({"type": "error", "error": str(exc)})
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    def generate():
+        while True:
+            try:
+                data = result_queue.get(timeout=1.0)
+            except _queue.Empty:
+                yield ": heartbeat\n\n"
+                continue
+
+            event_type = data.pop("type")
+            yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            if event_type in ("done", "error"):
+                break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/translate/status/{job_id}")
+async def translate_status(job_id: str) -> JSONResponse:
+    # Kept for backward compatibility — returns a stub response.
+    return JSONResponse(content={"status": "deprecated"})
+
+
+@app.get("/api/translate/result/{job_id}")
+async def translate_html_file(job_id: str) -> JSONResponse:
+    # Kept for backward compatibility — returns a stub response.
+    return JSONResponse(content={"status": "deprecated"})
+
+
+_static_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
+if _static_dir.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount(
+        "/",
+        StaticFiles(directory=str(_static_dir), html=True),
+        name="static",
+    )
