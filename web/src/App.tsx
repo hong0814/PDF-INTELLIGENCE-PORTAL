@@ -27,6 +27,7 @@ export default function App() {
   const addPdfs = useAppStore((s) => s.addPdfs);
   const removePdf = useAppStore((s) => s.removePdf);
   const setLoading = useAppStore((s) => s.setLoading);
+  const lastSearchQuery = useAppStore((s) => s.lastSearchQuery);
   const setError = useAppStore((s) => s.setError);
   const setSearchResults = useAppStore((s) => s.setSearchResults);
   const selectedPdfs = useAppStore((s) => s.selectedPdfs);
@@ -80,7 +81,6 @@ export default function App() {
           did404Ref.current = true;
           setSession('', '');
           localStorage.removeItem('pdftablesearch_session_id');
-          window.location.replace('/');
         }
       }
     });
@@ -136,7 +136,7 @@ export default function App() {
   const handleSearch = useCallback(async (query: string, maxResults: number, useSmartSearch: boolean) => {
     setLoading(true);
     setError(null);
-    setSearchResults([], null, 0);
+    setSearchResults([], null, 0, query);
 
     const startTime = performance.now();
 
@@ -155,12 +155,12 @@ export default function App() {
         });
 
         const elapsed = (performance.now() - startTime) / 1000;
-        setSearchResults([], smartRes, elapsed);
+        setSearchResults([], smartRes, elapsed, query);
         setShowProgress(false);
       } else {
         const searchRes = await api.search(query, maxResults, sessionId, selectedPdfs);
         const elapsed = (performance.now() - startTime) / 1000;
-        setSearchResults(searchRes.results, null, elapsed);
+        setSearchResults(searchRes.results, null, elapsed, query);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '검색 중 오류가 발생했습니다.');
@@ -216,12 +216,22 @@ export default function App() {
             <SearchBar
               onSearch={handleSearch}
               isLoading={isLoading}
-              initialQuery={pendingQuery}
+              initialQuery={pendingQuery || lastSearchQuery}
               onQueryConsumed={handleQueryConsumed}
               totalTables={totalTables}
             />
 
             <ProgressBar progress={progress} isVisible={showProgress} />
+
+            {lastSearchQuery && results.length > 0 && (
+              <div className="flex items-center gap-2 text-sm text-text-muted fade-in">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <span>검색어: <strong className="text-text-primary">{lastSearchQuery}</strong></span>
+              </div>
+            )}
+
 
             {error && (
               <div className="bg-danger/5 border border-danger/20 rounded-xl p-4 flex items-start gap-3 fade-in">

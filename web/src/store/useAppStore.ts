@@ -33,6 +33,7 @@ interface AppState {
   totalTables: number;
   totalPages: number;
   selectedPdfs: string[];
+  lastSearchQuery: string;
   results: TableResult[];
   smartResult: SmartSearchResponse | null;
   searchTime: number;
@@ -49,7 +50,7 @@ interface AppState {
   addPdfs: (newPdfs: PdfInfo[], totalTables: number, totalPages: number) => void;
   removePdf: (name: string) => void;
   setSelectedPdfs: (names: string[]) => void;
-  setSearchResults: (results: TableResult[], smartResult: SmartSearchResponse | null, time: number) => void;
+  setSearchResults: (results: TableResult[], smartResult: SmartSearchResponse | null, time: number, query?: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   addQAMessage: (msg: QAMessage) => void;
@@ -96,6 +97,7 @@ export const useAppStore = create<AppState>((set) => ({
   isUploading: false,
   tableQAs: {},
   highlightRegion: null,
+  lastSearchQuery: '',
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -121,10 +123,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   setSelectedPdfs: (names) => set({ selectedPdfs: names }),
 
-  setSearchResults: (results, smartResult, time) => {
+  setSearchResults: (results, smartResult, time, query?: string) => {
     const state = useAppStore.getState();
-    saveJson(searchKey(state.sessionId), { results, smartResult, time });
-    set({ results, smartResult, searchTime: time });
+    saveJson(searchKey(state.sessionId), { results, smartResult, time, lastSearchQuery: query || '' });
+    set({ results, smartResult, searchTime: time, lastSearchQuery: query || '' });
   },
 
   setLoading: (loading) => set({ isLoading: loading }),
@@ -173,7 +175,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   restoreFromStorage: (sessionId) => {
     if (!sessionId) return;
-    const searchData = loadJson<{ results: TableResult[]; smartResult: SmartSearchResponse | null; time: number }>(searchKey(sessionId));
+    const searchData = loadJson<{ results: TableResult[]; smartResult: SmartSearchResponse | null; time: number; lastSearchQuery: string }>(searchKey(sessionId));
     const qaData = loadJson<QAMessage[]>(qaKey(sessionId));
     const tableQaData = loadJson<Record<string, TableQAItem[]>>(tableQaKey(sessionId));
     const patch: Partial<AppState> = {};
@@ -181,6 +183,7 @@ export const useAppStore = create<AppState>((set) => ({
       patch.results = searchData.results;
       patch.smartResult = searchData.smartResult;
       patch.searchTime = searchData.time;
+      if (searchData.lastSearchQuery) patch.lastSearchQuery = searchData.lastSearchQuery;
     }
     if (qaData) patch.qaMessages = qaData;
     if (tableQaData) patch.tableQAs = tableQaData;
