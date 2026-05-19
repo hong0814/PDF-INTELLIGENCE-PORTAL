@@ -7,7 +7,7 @@ PDF 문서에서 표와 텍스트를 의미적으로 검색하고, AI 기반 질
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev/)
 [![LangChain](https://img.shields.io/badge/langchain-0.1.0-green.svg)](https://github.com/langchain-ai/langchain)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-0.4.0-orange.svg)](https://www.trychroma.com/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ## 목차
 
@@ -444,4 +444,4 @@ upload 중 "attempt to write a readonly database" 에러가 발생하면:
 
 ## 라이선스
 
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 확인하세요.
+이 프로젝트는 Apache License 2.0 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 확인하세요.
