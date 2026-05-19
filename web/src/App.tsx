@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProgressEvent } from './types';
 import * as api from './api/client';
 import { BASE } from './api/client';
@@ -31,9 +31,12 @@ export default function App() {
   const setSearchResults = useAppStore((s) => s.setSearchResults);
   const selectedPdfs = useAppStore((s) => s.selectedPdfs);
   const setPdfs = useAppStore((s) => s.setPdfs);
+  const setSession = useAppStore((s) => s.setSession);
   const setUploading = useAppStore((s) => s.setUploading);
   const restoreFromStorage = useAppStore((s) => s.restoreFromStorage);
   const reset = useAppStore((s) => s.reset);
+
+  const did404Ref = useRef(false);
 
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [showProgress, setShowProgress] = useState(false);
@@ -58,18 +61,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    restoreFromStorage(sessionId);
+    if (!sessionId || did404Ref.current) return;
+    let cancelled = false;
     api.listPdfs(sessionId).then((data) => {
+      if (cancelled) return;
       const pdfList = data.pdfs.map((info) => ({
         name: info.name,
         table_count: info.table_count,
         page_count: info.page_count,
       }));
       setPdfs(pdfList, data.total_tables, data.total_pages);
-    }).catch(() => {
-      // backend unavailable on initial load
+      restoreFromStorage(sessionId);
+    }).catch((err) => {
+      if (cancelled) return;
+      if (err instanceof Error) {
+        const msg = err.message || String(err);
+        if (msg.includes('404') || msg.includes('Session not found')) {
+          did404Ref.current = true;
+          setSession('', '');
+          localStorage.removeItem('pdftablesearch_session_id');
+          window.location.replace('/');
+        }
+      }
     });
-  }, [sessionId, setPdfs, restoreFromStorage]);
+    return () => { cancelled = true; };
+  }, [sessionId, setPdfs, setSession, restoreFromStorage]);
 
   const handleUploadComplete = useCallback((_sid: string, pdfData: Record<string, { table_count: number; page_count: number }>, totalTables: number, totalPages: number) => {
     const pdfList = Object.entries(pdfData).map(([name, info]) => ({

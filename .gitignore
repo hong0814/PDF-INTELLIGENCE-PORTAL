@@ -59,6 +59,12 @@ Thumbs.db
 # Claude memory
 .claude/
 
+# Sisyphus workspace
+.sisyphus/
+
+# Caches
+.cache/
+
 # Test coverage
 .coverage
 .pytest_cache

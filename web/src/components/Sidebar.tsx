@@ -25,21 +25,19 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refreshCurrentSession = useCallback(() => {
+    if (!sessionId) return;
     api.getSession(sessionId).then((info: SessionInfo) => {
       setCurrentSession(info);
     }).catch(() => {});
   }, [sessionId]);
 
   useEffect(() => {
+    if (!sessionId) return;
     api.getSessions().then((data: import('../types').SessionsResponse) => {
       setSessions(data.sessions ?? []);
     }).catch(() => {});
     refreshCurrentSession();
-  }, [refreshCurrentSession]);
-
-  useEffect(() => {
-    refreshCurrentSession();
-  }, [pdfs, refreshCurrentSession]);
+  }, [sessionId, refreshCurrentSession]);
 
   const handleFiles = useCallback(async (files: FileList | File[]) => {
     const pdfFiles = Array.from(files).filter(f => f.type === 'application/pdf' || f.name.endsWith('.pdf'));
