@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem } from '../types';
 
-export type TabId = 'main' | 'document' | 'search' | 'qa' | 'credit';
+export type TabId = 'main' | 'document' | 'search' | 'qa' | 'translation' | 'credit';
 
 export interface HighlightRegion {
   documentName: string;
@@ -44,6 +44,13 @@ interface AppState {
   isUploading: boolean;
   tableQAs: Record<string, TableQAItem[]>;
   highlightRegion: HighlightRegion | null;
+  sidebarCollapsed: boolean;
+  isTranslating: boolean;
+  translationProgress: string;
+  translatedPages: Record<string, Record<number, string>>;
+  setTranslationProgress: (msg: string) => void;
+  setTranslatedPage: (pdfName: string, page: number, html: string) => void;
+  clearTranslationState: (pdfName?: string) => void;
   setActiveTab: (tab: TabId) => void;
   setSession: (id: string, name: string) => void;
   setPdfs: (pdfs: PdfInfo[], totalTables: number, totalPages: number) => void;
@@ -61,6 +68,8 @@ interface AppState {
   addTableQA: (tableId: string, entry: TableQAItem) => void;
   updateTableQA: (tableId: string, index: number, answer: string) => void;
   setHighlightRegion: (region: HighlightRegion | null) => void;
+  toggleSidebar: () => void;
+  setIsTranslating: (v: boolean) => void;
   restoreFromStorage: (sessionId: string) => void;
   reset: () => void;
 }
@@ -87,6 +96,7 @@ export const useAppStore = create<AppState>((set) => ({
   totalTables: 0,
   totalPages: 0,
   selectedPdfs: [],
+  lastSearchQuery: '',
   results: [],
   smartResult: null,
   searchTime: 0,
@@ -97,7 +107,10 @@ export const useAppStore = create<AppState>((set) => ({
   isUploading: false,
   tableQAs: {},
   highlightRegion: null,
-  lastSearchQuery: '',
+  sidebarCollapsed: false,
+  isTranslating: false,
+  translationProgress: '',
+  translatedPages: {},
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -191,6 +204,27 @@ export const useAppStore = create<AppState>((set) => ({
   },
 
   setHighlightRegion: (region) => set({ highlightRegion: region }),
+
+  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+  setIsTranslating: (v) => set({ isTranslating: v }),
+
+  setTranslationProgress: (msg) => set({ translationProgress: msg }),
+
+  setTranslatedPage: (pdfName, page, html) =>
+    set((state) => ({
+      translatedPages: {
+        ...state.translatedPages,
+        [pdfName]: { ...state.translatedPages[pdfName], [page]: html },
+      },
+    })),
+
+  clearTranslationState: (pdfName) =>
+    set((state) =>
+      pdfName
+        ? { translatedPages: { ...state.translatedPages, [pdfName]: {} }, translationProgress: '' }
+        : { translatedPages: {}, translationProgress: '' }
+    ),
 
   reset: () => {
     localStorage.removeItem(SESSION_KEY);

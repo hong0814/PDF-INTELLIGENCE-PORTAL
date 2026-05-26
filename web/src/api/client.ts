@@ -205,6 +205,24 @@ export async function askDocument(
   }
 }
 
+export async function confirmTableGroups(
+  pdfName: string,
+  confirmed: { group_id: string; table_ids: string[] }[],
+  rejected: { group_id: string; table_ids: string[] }[],
+  sessionId: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/confirm-table-groups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+    body: JSON.stringify({
+      pdf_name: pdfName,
+      confirmed,
+      rejected,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export async function getSessions(): Promise<import('../types').SessionsResponse> {
   const res = await fetch(`${BASE}/sessions`);
   if (!res.ok) throw new Error(await res.text());
@@ -225,4 +243,81 @@ export async function getQaResults(sessionId: string): Promise<{
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function getPageHtml(
+  pdfName: string,
+  page: number,
+  sessionId: string,
+): Promise<string> {
+  const res = await fetch(
+    `${BASE}/documents/page-html?name=${encodeURIComponent(pdfName)}&page=${page}`,
+    { headers: { 'X-Session-ID': sessionId } },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.text();
+}
+
+export async function getTranslatedPage(
+  pdfName: string,
+  page: number,
+  sessionId: string,
+): Promise<string> {
+  const res = await fetch(
+    `${BASE}/translated-page?name=${encodeURIComponent(pdfName)}&page=${page}`,
+    { headers: { 'X-Session-ID': sessionId } },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.text();
+}
+
+export async function startHtmlTranslation(
+  pdfName: string,
+  sessionId: string,
+  sourceLang: string = 'ko',
+  targetLang: string = 'en',
+  onPageDone: (page: number, totalPages: number, originalHtml: string, translatedHtml: string) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/translate-html`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Session-ID': sessionId,
+    },
+    body: JSON.stringify({
+      pdf_name: pdfName,
+      source_lang: sourceLang,
+      target_lang: targetLang,
+    }),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  if (!res.body) throw new Error('No response body');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    let eventType = '';
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith('data: ')) {
+        const data = JSON.parse(line.slice(6));
+        if (eventType === 'page_done') {
+          onPageDone(data.page, data.total_pages, data.original_html, data.translated_html);
+        } else if (eventType === 'error') {
+          throw new Error(data.error);
+        }
+      }
+    }
+  }
 }
