@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
 import { BASE } from '../api/client';
@@ -288,7 +289,11 @@ function AnswerCard({
   onSourceClick: (source: UnifiedSource) => void;
 }) {
   const [showTables, setShowTables] = useState(true);
-  const cleanAnswer = answer.replace(/사용출처:.*$/m, '').trim();
+  const rawAnswer = answer.replace(/사용출처:.*$/m, '').trim();
+  const cleanAnswer = rawAnswer.replace(/\[(텍스트출처|표출처)\d*\]/g, (match) => {
+    const isTable = match.includes('표출처');
+    return `<span class="source-marker ${isTable ? 'source-marker-table' : 'source-marker-text'}">${match}</span>`;
+  });
 
   return (
     <div className="bg-surface-elevated border border-border rounded-xl overflow-hidden">
@@ -301,8 +306,8 @@ function AnswerCard({
           </div>
           <span className="text-sm font-semibold text-text-primary">AI 답변</span>
         </div>
-        <div className="prose prose-sm max-w-none text-text-secondary leading-relaxed prose-headings:text-text-primary prose-strong:text-text-primary">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanAnswer}</ReactMarkdown>
+        <div className="markdown-answer text-sm leading-relaxed">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{cleanAnswer}</ReactMarkdown>
         </div>
       </div>
 
@@ -355,17 +360,51 @@ function InlineTable({ table }: { table: TableResult }) {
   const [expanded, setExpanded] = useState(false);
   const title = table.table_title || `표 (p.${table.page_number})`;
 
+  const downloadCSV = useCallback(() => {
+    const html = table.table_html || '';
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const rows = doc.querySelectorAll('tr');
+    const csvLines: string[] = [];
+    rows.forEach(row => {
+      const cells = row.querySelectorAll('th, td');
+      const vals = Array.from(cells).map(c => `"${(c.textContent || '').replace(/"/g, '""')}"`);
+      csvLines.push(vals.join(','));
+    });
+    const bom = '\uFEFF';
+    const blob = new Blob([bom + csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[^가-힣a-zA-Z0-9]/g, '_')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [table.table_html, title]);
+
   return (
     <div className="border border-border rounded-lg overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 py-2 flex items-center justify-between bg-surface hover:bg-surface/80 transition-colors text-left"
-      >
-        <span className="text-xs font-medium text-text-primary truncate">{title}</span>
-        <svg className={`w-3.5 h-3.5 text-text-muted shrink-0 ml-2 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
+      <div className="w-full px-3 py-2 flex items-center justify-between bg-surface">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 text-left flex-1 min-w-0 hover:opacity-80 transition-opacity"
+        >
+          <svg className={`w-3.5 h-3.5 text-text-muted shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+          <span className="text-xs font-medium text-text-primary truncate">{title}</span>
+        </button>
+        <div className="flex items-center gap-1 shrink-0 ml-2">
+          <button
+            onClick={downloadCSV}
+            className="p-1 rounded hover:bg-surface-elevated transition-colors"
+            title="CSV 다운로드"
+          >
+            <svg className="w-3.5 h-3.5 text-text-muted hover:text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+        </div>
+      </div>
       {expanded && table.table_html && (
         <div className="border-t border-border">
           <iframe
@@ -424,8 +463,8 @@ function FollowupBubble({
         ) : isUser ? (
           <p className="text-sm">{message.content}</p>
         ) : (
-          <div className="prose prose-sm max-w-none text-text-secondary prose-headings:text-text-primary prose-strong:text-text-primary">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanContent}</ReactMarkdown>
+          <div className="markdown-answer text-sm">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{cleanContent}</ReactMarkdown>
           </div>
         )}
         {!isUser && message.sources && message.sources.length > 0 && (

@@ -823,6 +823,7 @@ def _build_tables_from_pymupdf(
             if best_ht and best_score > 0.10:
                 table_html = best_ht.get("table_html", "")
                 matched_hybrid_ids.add(best_ht.get("table_id", ""))
+                hybrid_bbox = best_ht.get("bounding_box", [])
                 source = "hybrid"
                 print(f"[build] outer p{o['page']} fitz[{o['fi']}] → hybrid score={best_score:.2f}")
 
@@ -855,10 +856,14 @@ def _build_tables_from_pymupdf(
         for inner_idx in o.get("inner_table_indices", []):
             inner_ids.append(f"fitz_p{inner_fitz[inner_idx]['page']}_{inner_fitz[inner_idx]['fi']}_inner")
 
+        final_bbox = [round(v, 2) for v in o["pdf_bbox"]]
+        if source == "hybrid" and hybrid_bbox and hybrid_bbox != [0, 0, 0, 0]:
+            final_bbox = [round(v, 2) for v in hybrid_bbox]
+
         results.append({
             "table_id": f"fitz_p{o['page']}_{o['fi']}",
             "page_number": o["page"],
-            "bounding_box": [round(v, 2) for v in o["pdf_bbox"]],
+            "bounding_box": final_bbox,
             "table_html": table_html,
             "table_title": title or None,
             "document_name": doc_name,
@@ -869,10 +874,7 @@ def _build_tables_from_pymupdf(
             "_source": source,
         })
 
-    fitz_pages = {o["page"] for o in outer_fitz}
     for pn, page_tables in hybrid_by_page.items():
-        if pn in fitz_pages:
-            continue
         for ht in page_tables:
             ht_id = ht.get("table_id", "")
             if ht_id in matched_hybrid_ids:
@@ -880,7 +882,7 @@ def _build_tables_from_pymupdf(
             ht_copy = dict(ht)
             ht_copy["_source"] = "hybrid_fallback"
             results.append(ht_copy)
-            print(f"[build] fallback p{pn}: {ht_id} (PyMuPDF missed this page, using hybrid)")
+            print(f"[build] fallback p{pn}: {ht_id} (no PyMuPDF match, using hybrid)")
 
     print(f"[build] RESULT: {len(results)} outer tables "
           f"(standard={sum(1 for r in results if r['_source']=='standard')}, "
