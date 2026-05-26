@@ -9,6 +9,9 @@ export interface TableResult {
   rerank_score: number | null;
   bounding_box: number[];
   table_type?: string;
+  group_id?: string;
+  merged_table_html?: string;
+  group_table_ids?: string[];
 }
 
 export interface PdfInfo {
@@ -22,6 +25,29 @@ export interface UploadResponse {
   pdfs: Record<string, { table_count: number; page_count: number }>;
   total_tables: number;
   total_pages?: number;
+  table_group_suggestions: TableGroupSuggestion[];
+}
+
+export interface TableGroupItem {
+  pdf_name: string;
+  table_a_id: string;
+  table_b_id: string;
+  group_id: string;
+}
+
+export interface TableGroupSuggestion {
+  pdf_name: string;
+  group_id: string;
+  chain_length: number;
+  same_cols: boolean;
+  pair_cols: [boolean, number, number][];
+  tables: {
+    table_id: string;
+    page_number: number;
+    bounding_box: number[];
+    table_title: string | null;
+    table_html: string;
+  }[];
 }
 
 export interface SearchResponse {
@@ -78,6 +104,6 @@ export interface QAMessage {
   id: string;
   role: 'user' | 'ai';
   content: string;
-  sources?: { pdf: string; chunk_index: number; page_number: number; pdf_page_count: number; text: string }[];
+  sources?: { pdf: string; chunk_index: number; page_number: number; pdf_page_count: number; paragraph_id?: string; text: string }[];
   isLoading?: boolean;
 }

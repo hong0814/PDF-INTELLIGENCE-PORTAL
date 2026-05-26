@@ -10,12 +10,23 @@ interface TableOverlay {
   x: number; y: number; w: number; h: number;
   html: string;
   title: string | null;
+  group_id?: string;
+  group_table_ids?: string[];
+  merged_html?: string;
+  has_inner_tables?: boolean;
+  is_inner?: boolean;
 }
+
+export type TableFilterMode = 'all' | 'outer' | 'inner';
 
 const HIGHLIGHT_COLOR = 'rgba(255, 200, 0, 0.35)';
 const HIGHLIGHT_BORDER_COLOR = 'rgba(255, 160, 0, 0.7)';
 
-export default function DocumentViewer() {
+interface DocumentViewerProps {
+  tableFilter?: TableFilterMode;
+}
+
+export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerProps) {
   const pdfs = useAppStore((s) => s.pdfs);
   const sessionId = useAppStore((s) => s.sessionId);
   const highlightRegion = useAppStore((s) => s.highlightRegion);
@@ -89,6 +100,11 @@ export default function DocumentViewer() {
         w: Math.abs(vx2 - vx1), h: Math.abs(vy2 - vy1),
         html: t.table_html || t.table_markdown || '',
         title: t.table_title || null,
+        group_id: t.group_id || undefined,
+        group_table_ids: t.group_table_ids || undefined,
+        merged_html: t.merged_table_html || undefined,
+        has_inner_tables: t.has_inner_tables || false,
+        is_inner: t.is_inner || false,
       };
     });
     setOverlays(newOverlays);
@@ -197,7 +213,11 @@ export default function DocumentViewer() {
     }
   }, [pageInput, numPages, goToPage]);
 
-  const currentPageTables = overlays.filter(o => o.page === currentPage);
+  const currentPageTables = overlays.filter(o => o.page === currentPage).filter(o => {
+    if (tableFilter === 'outer') return !o.is_inner;
+    if (tableFilter === 'inner') return o.is_inner || !o.has_inner_tables;
+    return true;
+  });
 
   if (pdfs.length === 0) {
     return (
@@ -315,7 +335,7 @@ export default function DocumentViewer() {
               <div
                 key={overlay.id}
                 onClick={() => setActiveOverlay(overlay)}
-                className="absolute cursor-pointer border-2 border-accent/40 bg-accent/10 hover:bg-accent/25 hover:border-accent/70 transition-colors rounded group"
+                className={`absolute cursor-pointer border-2 transition-colors rounded group ${overlay.group_id ? 'border-blue-400/60 bg-blue-400/10 hover:bg-blue-400/25 hover:border-blue-400/80' : 'border-accent/40 bg-accent/10 hover:bg-accent/25 hover:border-accent/70'}`}
                 style={{
                   left: overlay.x, top: overlay.y,
                   width: overlay.w, height: overlay.h,
@@ -324,6 +344,7 @@ export default function DocumentViewer() {
               >
                 <span className="absolute -top-5 left-1 text-[9px] bg-accent text-white px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                   {overlay.title || `표`}
+                  {overlay.group_id && ' (연속표)'}
                 </span>
               </div>
             ))}
@@ -334,13 +355,41 @@ export default function DocumentViewer() {
           <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center fade-in" onClick={() => setActiveOverlay(null)}>
             <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-[90vw] max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
-                <span className="text-sm font-semibold text-text-primary">{activeOverlay.title || '표'}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-text-primary">{activeOverlay.title || '표'}</span>
+                  {activeOverlay.group_id && (
+                    <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">연속표</span>
+                  )}
+                </div>
                 <button onClick={() => setActiveOverlay(null)} className="text-text-muted hover:text-text-primary">
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
+              {activeOverlay.group_table_ids && activeOverlay.group_table_ids.length > 1 && (
+                <div className="px-5 py-2 border-b bg-blue-50/50 flex items-center gap-2 text-xs text-blue-700">
+                  <span>연결 표:</span>
+                  {activeOverlay.group_table_ids.map((tid) => {
+                    const related = overlays.find(o => o.id === tid);
+                    if (!related) return null;
+                    return (
+                      <button
+                        key={tid}
+                        onClick={async () => {
+                          if (related.page !== currentPage) {
+                            await goToPage(related.page);
+                          }
+                          setActiveOverlay(related);
+                        }}
+                        className={`px-2 py-1 rounded border transition-colors ${tid === activeOverlay.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-blue-200 hover:bg-blue-100'}`}
+                      >
+                        p.{related.page} {tid === activeOverlay.id ? '(현재)' : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div className="flex-1 overflow-auto p-2">
                 <iframe
                   srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Pretendard,system-ui,sans-serif;padding:12px;margin:0}table{width:100%;border-collapse:collapse;font-size:13px}td,th{border:1px solid #e2e8f0;padding:6px 8px;text-align:left}th{background-color:#dbeafe;font-weight:600}tr:nth-child(even)td{background-color:#f8fafc}</style></head><body>${activeOverlay.html}</body></html>`}
