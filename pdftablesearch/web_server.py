@@ -506,7 +506,6 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
     except Exception:
         return
 
-    PAGE_HEIGHT = 842.0
     MAX_FITZ_TABLES = 200
 
     by_page: dict[int, list[dict]] = {}
@@ -521,6 +520,8 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
             continue
 
         page = doc[pn - 1]
+        page_h = page.rect.height
+        page_w = page.rect.width
         fitz_tables = page.find_tables().tables
 
         fitz_data: list[tuple] = []
@@ -549,14 +550,14 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
                 matched_fitz.add(best_fi)
                 ft = fitz_data[best_fi][1]
                 fbbox = list(ft.bbox)
-                pdf_bbox = [fbbox[0], PAGE_HEIGHT - fbbox[3], fbbox[2], PAGE_HEIGHT - fbbox[1]]
+                pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
 
                 current_bbox = t.get("bounding_box", [])
                 if not current_bbox or current_bbox == [0, 0, 0, 0]:
                     t["bounding_box"] = [round(v, 2) for v in pdf_bbox]
 
                 y_top_pymupdf = fbbox[1]
-                clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), 595, y_top_pymupdf)
+                clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
                 text_above = page.get_text("text", clip=clip).strip()
                 if text_above and len(text_above) <= 150:
                     last_line = text_above.split("\n")[-1].strip()
@@ -586,7 +587,7 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
             if is_inner:
                 continue
 
-            pdf_bbox = [fbbox[0], PAGE_HEIGHT - fbbox[3], fbbox[2], PAGE_HEIGHT - fbbox[1]]
+            pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
             data = ft.extract()
             if not data:
                 continue
@@ -601,7 +602,7 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
 
             table_title = ""
             y_top_pymupdf = fbbox[1]
-            clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), 595, y_top_pymupdf)
+            clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
             text_above = page.get_text("text", clip=clip).strip()
             if text_above and len(text_above) <= 150:
                 last_line = text_above.split("\n")[-1].strip()
@@ -719,7 +720,6 @@ def _build_tables_from_pymupdf(
     except Exception:
         return hybrid_tables
 
-    PAGE_HEIGHT = 842.0
     doc_name = hybrid_tables[0].get("document_name", "") if hybrid_tables else ""
 
     standard_tables: list[dict] = []
@@ -736,6 +736,8 @@ def _build_tables_from_pymupdf(
     for page_idx in range(len(doc)):
         pn = page_idx + 1
         page = doc[page_idx]
+        page_h = page.rect.height
+        page_w = page.rect.width
         fitz_tables = page.find_tables().tables
 
         fitz_data = []
@@ -746,7 +748,7 @@ def _build_tables_from_pymupdf(
                 continue
             data = ft.extract()
             ft_text = _normalize_text(" ".join(" ".join(str(c or "") for c in row) for row in data))
-            pdf_bbox = [fbbox[0], PAGE_HEIGHT - fbbox[3], fbbox[2], PAGE_HEIGHT - fbbox[1]]
+            pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
             fitz_data.append({
                 "fi": fi, "ft": ft, "bbox": fbbox, "pdf_bbox": pdf_bbox,
                 "area": area, "text": ft_text, "data": data, "page": pn,
@@ -782,7 +784,7 @@ def _build_tables_from_pymupdf(
                 break
 
     results: list[dict] = []
-    matched_hybrid: set[int] = set()
+    matched_hybrid_ids: set[str] = set()
     matched_standard: set[int] = set()
 
     for oi, o in enumerate(outer_fitz):
@@ -812,7 +814,7 @@ def _build_tables_from_pymupdf(
             best_score = 0.0
             best_ht = None
             page_hybrid = hybrid_by_page.get(o["page"], [])
-            for hi, ht in enumerate(page_hybrid):
+            for ht in page_hybrid:
                 html_text = _normalize_text(_table_text_content(ht.get("table_html", "")))
                 score = _table_match_score(html_text, o["text"])
                 if score > best_score:
@@ -820,6 +822,7 @@ def _build_tables_from_pymupdf(
                     best_ht = ht
             if best_ht and best_score > 0.10:
                 table_html = best_ht.get("table_html", "")
+                matched_hybrid_ids.add(best_ht.get("table_id", ""))
                 source = "hybrid"
                 print(f"[build] outer p{o['page']} fitz[{o['fi']}] → hybrid score={best_score:.2f}")
 
@@ -837,16 +840,14 @@ def _build_tables_from_pymupdf(
 
         title = ""
         try:
-            page_doc = fitz.open(pdf_path)
-            page = page_doc[o["page"] - 1]
+            title_page = doc[o["page"] - 1]
             y_top = o["bbox"][1]
-            clip = fitz.Rect(0, max(0, y_top - 50), 595, y_top)
-            text_above = page.get_text("text", clip=clip).strip()
+            clip = fitz.Rect(0, max(0, y_top - 50), title_page.rect.width, y_top)
+            text_above = title_page.get_text("text", clip=clip).strip()
             if text_above and len(text_above) <= 150:
                 last_line = text_above.split("\n")[-1].strip()
                 if last_line and len(last_line) <= 80:
                     title = last_line
-            page_doc.close()
         except Exception:
             pass
 
@@ -868,10 +869,24 @@ def _build_tables_from_pymupdf(
             "_source": source,
         })
 
+    fitz_pages = {o["page"] for o in outer_fitz}
+    for pn, page_tables in hybrid_by_page.items():
+        if pn in fitz_pages:
+            continue
+        for ht in page_tables:
+            ht_id = ht.get("table_id", "")
+            if ht_id in matched_hybrid_ids:
+                continue
+            ht_copy = dict(ht)
+            ht_copy["_source"] = "hybrid_fallback"
+            results.append(ht_copy)
+            print(f"[build] fallback p{pn}: {ht_id} (PyMuPDF missed this page, using hybrid)")
+
     print(f"[build] RESULT: {len(results)} outer tables "
           f"(standard={sum(1 for r in results if r['_source']=='standard')}, "
           f"hybrid={sum(1 for r in results if r['_source']=='hybrid')}, "
-          f"pymupdf={sum(1 for r in results if r['_source']=='pymupdf')})")
+          f"pymupdf={sum(1 for r in results if r['_source']=='pymupdf')}, "
+          f"hybrid_fallback={sum(1 for r in results if r['_source']=='hybrid_fallback')})")
     return results
 
 
