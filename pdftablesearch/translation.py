@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 import threading
 import time
@@ -36,26 +37,31 @@ _SEP_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_TRANSLATE_PROMPT = (
-    "You are a professional translator. Translate each text block from {src} to {tgt}.\n"
-    "Rules:\n"
-    "- Keep the ###N### markers exactly as-is. Translate ONLY the text after each marker.\n"
-    "- Translate EVERY Korean word to English. Do not leave any Korean untranslated.\n"
-    "- Do NOT translate numbers, percentages, dates, or currency symbols.\n"
-    "- For company names like 현대캐피탈㈜, translate to 'Hyundai Capital Co., Ltd.'\n"
-    "- Return ALL items in the same order with ###N### markers.\n"
-    "- No explanation or extra text.\n"
-    "Example input:\n"
-    "###1###\n현대캐피탈㈜\n###2###\n평가담당자\n\n"
-    "Example output:\n"
-    "###1###\nHyundai Capital Co., Ltd.\n###2###\nAnalyst in Charge"
-)
+def _build_translate_prompt(src: str, tgt: str) -> str:
+    return (
+        f"You are a professional translator. Translate each text block from {src} to {tgt}.\n"
+        "Rules:\n"
+        "- Keep the ###N### markers exactly as-is. Translate ONLY the text after each marker.\n"
+        f"- Translate every word from {src} to {tgt}. Do not leave any untranslated text.\n"
+        "- Do NOT translate numbers, percentages, dates, or currency symbols.\n"
+        "- For company names, translate to their official name in the target language.\n"
+        "- Return ALL items in the same order with ###N### markers.\n"
+        "- No explanation or extra text.\n"
+    )
 
 # Delimiter that won't appear in natural text
 _DELIM = "###"
 
 # Maximum concurrent translation API calls
-_MAX_CONCURRENT = 3
+# Reduced to 1 (sequential) to avoid 429 rate limits on translation API
+_MAX_CONCURRENT = 1
+
+_INTER_PAGE_DELAY = 3
+
+_BATCH_SIZE = 10
+
+_TRANSLATION_MODEL = "glm-4.5-air"
+_TRANSLATION_TIMEOUT = 60
 
 
 # ---------------------------------------------------------------------------
@@ -106,21 +112,32 @@ def _translate_page(
     if not text_nodes:
         return _clean_attrs_str(str(soup))
 
-    # 2. Deduplicate — only texts containing Korean characters (skip numbers/English)
     _HANGUL = re.compile(r"[가-힣]")
+    _LATIN = re.compile(r"[a-zA-Z]")
+    _src_re = _HANGUL if ("한국" in src_name or src_name.lower() in ("ko", "korean")) else _LATIN
+
     unique_texts: list[str] = []
     seen: set[str] = set()
     for node in text_nodes:
         key = node.strip()
-        if key not in seen and _HANGUL.search(key):
+        if key not in seen and _src_re.search(key):
             seen.add(key)
             unique_texts.append(key)
 
     if not unique_texts:
         return _clean_attrs_str(str(soup))
 
-    # 3. Translate in a single API call
-    cache = _translate_all_in_one(unique_texts, client, src_name, tgt_name)
+    # 3. Translate in batches — partial failures OK
+    cache: dict[str, str] = {}
+    for batch_start in range(0, len(unique_texts), _BATCH_SIZE):
+        batch = unique_texts[batch_start:batch_start + _BATCH_SIZE]
+        try:
+            batch_cache = _translate_all_in_one(batch, client, src_name, tgt_name)
+            cache.update(batch_cache)
+        except Exception as exc:
+            logger.warning("Batch %d-%d failed: %s, keeping originals", batch_start, batch_start + len(batch), exc)
+        if batch_start + _BATCH_SIZE < len(unique_texts):
+            time.sleep(1)
 
     # 4. Replace texts in the soup tree
     for node in text_nodes:
@@ -140,7 +157,7 @@ def _translate_all_in_one(
     tgt_name: str,
 ) -> dict[str, str]:
     """Send all texts in one API call with ###N### delimiter format."""
-    prompt = _TRANSLATE_PROMPT.format(src=src_name, tgt=tgt_name)
+    prompt = _build_translate_prompt(src_name, tgt_name)
 
     # Build input with ###N### markers
     parts = []
@@ -163,9 +180,11 @@ def _translate_all_in_one(
                 len(cache), len(texts), attempt + 1,
             )
         except Exception as exc:
-            wait = min(10 * (attempt + 1), 60)
+            is_rate_limit = "429" in str(exc) or "rate" in str(exc).lower()
+            base = 30 if is_rate_limit else 5
+            wait = min(base * (2 ** attempt) + random.uniform(0, 10), 300)
             logger.warning(
-                "Translation API error (attempt %d/5): %s — waiting %ds",
+                "Translation API error (attempt %d/5): %s — waiting %.0fs",
                 attempt + 1, exc, wait,
             )
             time.sleep(wait)
@@ -280,8 +299,10 @@ async def _translate_pages_concurrent(
         )
 
         if on_page_done:
-            # on_page_done may not be thread-safe, call in event loop
             on_page_done(page_num, total_pages, result["original_html"], result["translated_html"])
+
+        if _INTER_PAGE_DELAY > 0 and len(pages) > 1:
+            await asyncio.sleep(_INTER_PAGE_DELAY)
 
         return result
 
@@ -319,7 +340,7 @@ def translate_html_by_pages(
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
 
-    client = ZaiLLMClient(max_retries=3, model="glm-4.7", timeout=120)
+    client = ZaiLLMClient(max_retries=0, model=_TRANSLATION_MODEL, timeout=_TRANSLATION_TIMEOUT)
 
     html_content = Path(html_path).read_text(encoding="utf-8")
     pages = split_html_by_pages(html_content)
@@ -328,8 +349,8 @@ def translate_html_by_pages(
     out.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "Starting concurrent translation: %d pages, max %d concurrent",
-        len(pages), _MAX_CONCURRENT,
+        "Starting translation: %d pages, model=%s, batch_size=%d, delay=%ds",
+        len(pages), _TRANSLATION_MODEL, _BATCH_SIZE, _INTER_PAGE_DELAY,
     )
 
     # Check if already inside an event loop (e.g., FastAPI's)
@@ -371,7 +392,7 @@ def translate_html(
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
 
-    client = ZaiLLMClient(max_retries=3, model="glm-4.7")
+    client = ZaiLLMClient(max_retries=0, model=_TRANSLATION_MODEL, timeout=_TRANSLATION_TIMEOUT)
 
     html_content = Path(html_path).read_text(encoding="utf-8")
     translated = _translate_page(html_content, client, src, tgt)
@@ -391,16 +412,17 @@ def translate_html(
 
 _CHUNK_SIZE = 3000  # characters per chunk (~1-2 pages of text)
 
-_TEXT_TRANSLATE_PROMPT = (
-    "You are a professional financial document translator. "
-    "Translate the following Korean text to English.\n"
-    "Rules:\n"
-    "- Translate EVERY Korean word to English. Do not leave any Korean untranslated.\n"
-    "- Do NOT translate numbers, percentages, dates, or currency symbols.\n"
-    "- For company names like 현대캐피탈㈜, translate to 'Hyundai Capital Co., Ltd.'\n"
-    "- Preserve paragraph breaks and line structure.\n"
-    "- No explanation or extra text — output ONLY the translation."
-)
+def _build_text_translate_prompt(src: str, tgt: str) -> str:
+    return (
+        f"You are a professional financial document translator. "
+        f"Translate the following {src} text to {tgt}.\n"
+        "Rules:\n"
+        f"- Translate every word from {src} to {tgt}. Do not leave any untranslated text.\n"
+        "- Do NOT translate numbers, percentages, dates, or currency symbols.\n"
+        "- For company names, translate to their official name in the target language.\n"
+        "- Preserve paragraph breaks and line structure.\n"
+        "- No explanation or extra text — output ONLY the translation."
+    )
 
 
 def translate_text_chunks(
@@ -444,7 +466,7 @@ def translate_text_chunks(
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
 
-    client = ZaiLLMClient(max_retries=5, model="glm-4.7", timeout=120)
+    client = ZaiLLMClient(max_retries=0, model=_TRANSLATION_MODEL, timeout=_TRANSLATION_TIMEOUT)
 
     translated_parts: list[str] = []
     total = len(chunks)
@@ -454,19 +476,21 @@ def translate_text_chunks(
             translated_parts.append("")
             continue
 
-        for attempt in range(5):
+        for attempt in range(3):
             try:
                 response = client._llm.invoke([
-                    {"role": "system", "content": _TEXT_TRANSLATE_PROMPT},
+                    {"role": "system", "content": _build_text_translate_prompt(src, tgt)},
                     {"role": "user", "content": chunk},
                 ])
                 translated = response.content.strip()
                 translated_parts.append(translated)
                 break
             except Exception as exc:
-                wait = min(10 * (attempt + 1), 60)
+                is_rate_limit = "429" in str(exc) or "rate" in str(exc).lower()
+                base = 15 if is_rate_limit else 5
+                wait = min(base * (2 ** attempt) + random.uniform(0, 5), 120)
                 logger.warning(
-                    "Text translation error chunk %d/%d (attempt %d/5): %s — waiting %ds",
+                    "Text translation error chunk %d/%d (attempt %d/3): %s — waiting %.0fs",
                     i + 1, total, attempt + 1, exc, wait,
                 )
                 time.sleep(wait)
