@@ -107,3 +107,26 @@ export interface QAMessage {
   sources?: { pdf: string; chunk_index: number; page_number: number; pdf_page_count: number; paragraph_id?: string; text: string }[];
   isLoading?: boolean;
 }
+
+export interface UnifiedSource {
+  type: 'text' | 'table';
+  pdf: string;
+  page_number: number;
+  text: string;
+  chunk_index?: number;
+  table_id?: string;
+}
+
+export interface UnifiedSearchResponse {
+  answer: string;
+  tables: TableResult[];
+  sources: UnifiedSource[];
+}
+
+export interface UnifiedFollowupMessage {
+  id: string;
+  role: 'user' | 'ai';
+  content: string;
+  sources?: UnifiedSource[];
+  isLoading?: boolean;
+}

@@ -4,6 +4,8 @@ import type {
   SmartSearchResponse,
   ProgressEvent,
   PdfsResponse,
+  UnifiedSearchResponse,
+  UnifiedSource,
 } from '../types';
 
 export const BASE = '/api';
@@ -316,6 +318,107 @@ export async function startHtmlTranslation(
           onPageDone(data.page, data.total_pages, data.original_html, data.translated_html);
         } else if (eventType === 'error') {
           throw new Error(data.error);
+        }
+      }
+    }
+  }
+}
+
+export async function unifiedSearch(
+  query: string,
+  sessionId: string,
+  onProgress: (event: ProgressEvent) => void,
+  pdfNames?: string[],
+): Promise<UnifiedSearchResponse> {
+  const body: Record<string, unknown> = { query };
+  if (pdfNames && pdfNames.length > 0) body.pdf_names = pdfNames;
+  const res = await fetch(`${BASE}/unified-search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResult: UnifiedSearchResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6).trim();
+        if (!data) continue;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.phase !== undefined) {
+            onProgress(parsed as ProgressEvent);
+          } else if (parsed.answer !== undefined) {
+            finalResult = parsed as UnifiedSearchResponse;
+          } else if (parsed.error !== undefined) {
+            throw new Error(parsed.error);
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.includes('error')) throw e;
+        }
+      }
+    }
+  }
+
+  if (!finalResult) throw new Error('No result received from unified search');
+  return finalResult;
+}
+
+export async function unifiedFollowup(
+  question: string,
+  context: string,
+  sourcesJson: string,
+  sessionId: string,
+  onToken: (token: string) => void,
+  onSources?: (sources: UnifiedSource[]) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/unified-followup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+    body: JSON.stringify({ question, context, sources_json: sourcesJson }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6).trim();
+        if (!data) continue;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.token) onToken(parsed.token);
+          if (parsed.sources && onSources) onSources(parsed.sources);
+        } catch (e) {
+          if (e instanceof Error && !e.message.includes('JSON')) throw e;
         }
       }
     }

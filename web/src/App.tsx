@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProgressEvent, TableGroupSuggestion } from './types';
+import type { TableGroupSuggestion } from './types';
 import * as api from './api/client';
 import { BASE } from './api/client';
 import { useAppStore } from './store/useAppStore';
 import Sidebar from './components/Sidebar';
-import SearchBar from './components/SearchBar';
-import SearchResults from './components/SearchResults';
-import ProgressBar from './components/ProgressBar';
 import MainScreen from './components/MainScreen';
 import TabBar from './components/TabBar';
 import SessionHeader from './components/SessionHeader';
 import DocumentViewer from './components/DocumentViewer';
 import CreditReviewView from './components/CreditReviewView';
-import QAPanel from './components/QAPanel';
+import UnifiedSearchView from './components/UnifiedSearchView';
 import TranslationView from './components/TranslationView';
 import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
 
@@ -20,19 +17,9 @@ export default function App() {
   const sessionId = useAppStore((s) => s.sessionId);
   const pdfs = useAppStore((s) => s.pdfs);
   const totalTables = useAppStore((s) => s.totalTables);
-  const results = useAppStore((s) => s.results);
-  const smartResult = useAppStore((s) => s.smartResult);
-  const searchTime = useAppStore((s) => s.searchTime);
-  const isLoading = useAppStore((s) => s.isLoading);
-  const error = useAppStore((s) => s.error);
   const activeTab = useAppStore((s) => s.activeTab);
   const addPdfs = useAppStore((s) => s.addPdfs);
   const removePdf = useAppStore((s) => s.removePdf);
-  const setLoading = useAppStore((s) => s.setLoading);
-  const lastSearchQuery = useAppStore((s) => s.lastSearchQuery);
-  const setError = useAppStore((s) => s.setError);
-  const setSearchResults = useAppStore((s) => s.setSearchResults);
-  const selectedPdfs = useAppStore((s) => s.selectedPdfs);
   const setPdfs = useAppStore((s) => s.setPdfs);
   const setSession = useAppStore((s) => s.setSession);
   const setUploading = useAppStore((s) => s.setUploading);
@@ -41,9 +28,6 @@ export default function App() {
 
   const did404Ref = useRef(false);
 
-  const [progress, setProgress] = useState<ProgressEvent | null>(null);
-  const [showProgress, setShowProgress] = useState(false);
-  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
 
   const handleCreateSession = useCallback(async () => {
@@ -154,47 +138,6 @@ export default function App() {
     }
   }, [sessionId, handleUploadComplete, setUploading, handleCreateSession]);
 
-  const handleSearch = useCallback(async (query: string, maxResults: number, useSmartSearch: boolean) => {
-    setLoading(true);
-    setError(null);
-    setSearchResults([], null, 0, query);
-
-    const startTime = performance.now();
-
-    try {
-      if (useSmartSearch) {
-        setShowProgress(true);
-        setProgress({ phase: 'pdf', message: 'PDF를 분석하고 있습니다...', pct: 5 });
-
-        const firstPdf = pdfs[0]?.name ?? '';
-        if (!firstPdf) {
-          throw new Error('Smart Search를 사용하려면 PDF를 먼저 업로드하세요.');
-        }
-
-        const smartRes = await api.smartSearch(query, firstPdf, sessionId, (evt) => {
-          setProgress(evt);
-        });
-
-        const elapsed = (performance.now() - startTime) / 1000;
-        setSearchResults([], smartRes, elapsed, query);
-        setShowProgress(false);
-      } else {
-        const searchRes = await api.search(query, maxResults, sessionId, selectedPdfs);
-        const elapsed = (performance.now() - startTime) / 1000;
-        setSearchResults(searchRes.results, null, elapsed, query);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '검색 중 오류가 발생했습니다.');
-      setShowProgress(false);
-    } finally {
-      setLoading(false);
-    }
-  }, [pdfs, sessionId, selectedPdfs, setLoading, setError, setSearchResults]);
-
-  const handleQueryConsumed = useCallback(() => {
-    setPendingQuery(null);
-  }, []);
-
   const renderContent = () => {
     switch (activeTab) {
       case 'main':
@@ -208,84 +151,7 @@ export default function App() {
         return <DocumentViewer />;
 
       case 'search':
-        return (
-          <div className="max-w-4xl mx-auto space-y-6">
-            <div className="flex items-end justify-between">
-              <div>
-                <h1 className="text-2xl font-bold text-text-primary tracking-tight">표 검색</h1>
-                <p className="text-sm text-text-muted mt-1">PDF 문서에서 의미적으로 관련된 표를 검색합니다</p>
-              </div>
-              {pdfs.length > 0 && (
-                <div className="flex items-center gap-3 text-sm text-text-muted mb-0.5">
-                  <span className="flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    {pdfs.length}개 문서
-                  </span>
-                  <span className="text-border">|</span>
-                  <span className="flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 14h18m-9-4v8m-7-4h14M4 6h16" />
-                    </svg>
-                    {totalTables}개 테이블
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <SearchBar
-              onSearch={handleSearch}
-              isLoading={isLoading}
-              initialQuery={pendingQuery || lastSearchQuery}
-              onQueryConsumed={handleQueryConsumed}
-              totalTables={totalTables}
-            />
-
-            <ProgressBar progress={progress} isVisible={showProgress} />
-
-            {lastSearchQuery && results.length > 0 && (
-              <div className="flex items-center gap-2 text-sm text-text-muted fade-in">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                <span>검색어: <strong className="text-text-primary">{lastSearchQuery}</strong></span>
-              </div>
-            )}
-
-
-            {error && (
-              <div className="bg-danger/5 border border-danger/20 rounded-xl p-4 flex items-start gap-3 fade-in">
-                <svg className="w-5 h-5 text-danger shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div>
-                  <p className="text-sm font-medium text-danger">오류 발생</p>
-                  <p className="text-sm text-danger/80 mt-0.5">{error}</p>
-                </div>
-              </div>
-            )}
-
-            <SearchResults
-              results={results}
-              smartResult={smartResult}
-              timeSeconds={searchTime}
-              sessionId={sessionId}
-            />
-
-            {!isLoading && results.length === 0 && !smartResult && !error && (
-              <div className="text-center py-16">
-                <svg className="w-16 h-16 mx-auto text-border mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <p className="text-text-muted text-sm">PDF를 업로드하고 검색어를 입력하세요</p>
-              </div>
-            )}
-          </div>
-        );
-
-      case 'qa':
-        return <QAPanel />;
+        return <UnifiedSearchView />;
 
       case 'translation':
         return <TranslationView />;
@@ -330,7 +196,7 @@ export default function App() {
         <TabBar />
         <SessionHeader />
 
-        <main className={`flex-1 overflow-hidden ${activeTab === 'document' || activeTab === 'qa' ? '' : 'overflow-y-auto p-6'}`}>
+        <main className={`flex-1 overflow-hidden ${activeTab === 'document' ? '' : 'overflow-y-auto p-6'}`}>
           {renderContent()}
         </main>
       </div>

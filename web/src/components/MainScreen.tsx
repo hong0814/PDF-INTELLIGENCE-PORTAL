@@ -55,7 +55,7 @@ export default function MainScreen({ onUpload, hasDocuments }: MainScreenProps) 
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <NavLink
             icon={
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -72,19 +72,9 @@ export default function MainScreen({ onUpload, hasDocuments }: MainScreenProps) 
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
               </svg>
             }
-            title="표 검색"
-            description="자연어로 의미 기반 표 검색. 키워드가 아닌 의미를 이해하여 정확한 표를 찾아줍니다."
+            title="문서 검색"
+            description="표와 텍스트를 통합 검색. AI가 관련 문서를 찾아 답변합니다."
             onClick={() => setActiveTab('search')}
-          />
-          <NavLink
-            icon={
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
-            }
-            title="텍스트 검색"
-            description="문서 내용을 자연어로 검색하세요. AI가 관련 텍스트를 찾아 답변합니다."
-            onClick={() => setActiveTab('qa')}
           />
         </div>
 
@@ -206,7 +196,7 @@ export default function MainScreen({ onUpload, hasDocuments }: MainScreenProps) 
         </div>
       </div>
 
-      <div className="w-full max-w-2xl grid grid-cols-3 gap-4 mt-10">
+      <div className="w-full max-w-2xl grid grid-cols-2 gap-4 mt-10">
         <FeatureCard
           icon={
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -222,17 +212,8 @@ export default function MainScreen({ onUpload, hasDocuments }: MainScreenProps) 
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
             </svg>
           }
-          title="표 검색"
-          description="자연어로 의미 기반 표 검색. 키워드가 아닌 의미를 이해하여 정확한 표를 찾아줍니다."
-        />
-        <FeatureCard
-          icon={
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-          }
-          title="텍스트 검색"
-          description="문서 내용을 자연어로 검색하세요. AI가 관련 텍스트를 찾아 답변합니다."
+          title="문서 검색"
+          description="표와 텍스트를 통합 검색. AI가 관련 문서를 찾아 답변합니다."
         />
       </div>
     </div>

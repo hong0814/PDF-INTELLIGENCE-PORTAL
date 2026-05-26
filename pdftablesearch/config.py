@@ -34,9 +34,12 @@ class Settings(BaseSettings):
     zai_api_key: Optional[str] = None
     zai_embedding_endpoint: str = "https://api.z.ai/api/embeddings"
     zai_embedding_model: str = "embedding-3"
-    zai_llm_endpoint: str = "https://api.z.ai/api/coding/paas/v4"
-    zai_llm_model: str = "glm-4.7"
-    zai_llm_rerank_model: str = "glm-4.7"
+
+    # -- Ollama LLM -----------------------------------------------------------
+    ollama_api_key: Optional[str] = None
+    zai_llm_endpoint: str = "https://ollama.com/v1"
+    zai_llm_model: str = "gpt-oss:120b"
+    zai_llm_rerank_model: str = "gpt-oss:120b"
 
     # -- Local Embeddings -----------------------------------------------------
 

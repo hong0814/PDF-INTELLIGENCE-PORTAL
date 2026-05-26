@@ -22,19 +22,10 @@ const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
   },
   {
     id: 'search',
-    label: '표 검색',
+    label: '문서 검색',
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 14h18m-9-4v8m-7-4h14M4 6h16" />
-      </svg>
-    ),
-  },
-  {
-    id: 'qa',
-    label: '텍스트 검색',
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
       </svg>
     ),
   },
@@ -62,7 +53,7 @@ export default function TabBar() {
   const activeTab = useAppStore((s) => s.activeTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const tableQAs = useAppStore((s) => s.tableQAs);
-  const qaMessages = useAppStore((s) => s.qaMessages);
+  const unifiedFollowups = useAppStore((s) => s.unifiedFollowups);
   const isTranslating = useAppStore((s) => s.isTranslating);
   const hasSearchQA = useMemo(() => {
     for (const items of Object.values(tableQAs)) {
@@ -71,15 +62,15 @@ export default function TabBar() {
     return false;
   }, [tableQAs]);
 
-  const hasDocQA = useMemo(() => {
-    return qaMessages.some(m => m.isLoading);
-  }, [qaMessages]);
+  const hasUnifiedFollowup = useMemo(() => {
+    return unifiedFollowups.some(m => m.isLoading);
+  }, [unifiedFollowups]);
 
   return (
     <nav className="flex items-center border-b border-border bg-surface-elevated px-4">
       {TABS.map((tab) => {
         const isActive = activeTab === tab.id;
-        const showPending = (tab.id === 'search' && hasSearchQA) || (tab.id === 'qa' && hasDocQA) || (tab.id === 'translation' && isTranslating);
+        const showPending = (tab.id === 'search' && (hasSearchQA || hasUnifiedFollowup)) || (tab.id === 'translation' && isTranslating);
         return (
           <button
             key={tab.id}

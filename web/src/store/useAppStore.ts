@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import type { PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem } from '../types';
+import type { PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem, UnifiedSearchResponse, UnifiedFollowupMessage } from '../types';
 
-export type TabId = 'main' | 'document' | 'search' | 'qa' | 'translation' | 'credit';
+export type TabId = 'main' | 'document' | 'search' | 'translation' | 'credit';
 
 export interface HighlightRegion {
   documentName: string;
@@ -14,6 +14,7 @@ export interface HighlightRegion {
 function searchKey(sid: string) { return `pdfts_${sid}_search`; }
 function qaKey(sid: string) { return `pdfts_${sid}_qa`; }
 function tableQaKey(sid: string) { return `pdfts_${sid}_tableqas`; }
+function unifiedKey(sid: string) { return `pdfts_${sid}_unified`; }
 
 function saveJson(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
@@ -48,6 +49,8 @@ interface AppState {
   isTranslating: boolean;
   translationProgress: string;
   translatedPages: Record<string, Record<number, string>>;
+  unifiedResult: UnifiedSearchResponse | null;
+  unifiedFollowups: UnifiedFollowupMessage[];
   setTranslationProgress: (msg: string) => void;
   setTranslatedPage: (pdfName: string, page: number, html: string) => void;
   clearTranslationState: (pdfName?: string) => void;
@@ -70,6 +73,10 @@ interface AppState {
   setHighlightRegion: (region: HighlightRegion | null) => void;
   toggleSidebar: () => void;
   setIsTranslating: (v: boolean) => void;
+  setUnifiedResult: (result: UnifiedSearchResponse | null) => void;
+  addUnifiedFollowup: (msg: UnifiedFollowupMessage) => void;
+  updateUnifiedFollowup: (id: string, updates: Partial<UnifiedFollowupMessage>) => void;
+  clearUnifiedSearch: () => void;
   restoreFromStorage: (sessionId: string) => void;
   reset: () => void;
 }
@@ -111,6 +118,8 @@ export const useAppStore = create<AppState>((set) => ({
   isTranslating: false,
   translationProgress: '',
   translatedPages: {},
+  unifiedResult: null,
+  unifiedFollowups: [],
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -200,6 +209,11 @@ export const useAppStore = create<AppState>((set) => ({
     }
     if (qaData) patch.qaMessages = qaData;
     if (tableQaData) patch.tableQAs = tableQaData;
+    const unifiedData = loadJson<{ result: UnifiedSearchResponse; followups: UnifiedFollowupMessage[] }>(unifiedKey(sessionId));
+    if (unifiedData) {
+      patch.unifiedResult = unifiedData.result;
+      patch.unifiedFollowups = unifiedData.followups || [];
+    }
     if (Object.keys(patch).length > 0) set(patch);
   },
 
@@ -208,6 +222,30 @@ export const useAppStore = create<AppState>((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
   setIsTranslating: (v) => set({ isTranslating: v }),
+
+  setUnifiedResult: (result) => {
+    const state = useAppStore.getState();
+    saveJson(unifiedKey(state.sessionId), { result, followups: state.unifiedFollowups });
+    set({ unifiedResult: result });
+  },
+  addUnifiedFollowup: (msg) => {
+    set((state) => {
+      const updated = [...state.unifiedFollowups, msg];
+      saveJson(unifiedKey(state.sessionId), { result: state.unifiedResult, followups: updated });
+      return { unifiedFollowups: updated };
+    });
+  },
+  updateUnifiedFollowup: (id, updates) =>
+    set((state) => {
+      const updated = state.unifiedFollowups.map((m) => (m.id === id ? { ...m, ...updates } : m));
+      saveJson(unifiedKey(state.sessionId), { result: state.unifiedResult, followups: updated });
+      return { unifiedFollowups: updated };
+    }),
+  clearUnifiedSearch: () => {
+    const state = useAppStore.getState();
+    saveJson(unifiedKey(state.sessionId), null);
+    set({ unifiedResult: null, unifiedFollowups: [] });
+  },
 
   setTranslationProgress: (msg) => set({ translationProgress: msg }),
 

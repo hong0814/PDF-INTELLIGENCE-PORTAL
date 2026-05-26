@@ -98,6 +98,17 @@ class CalculateRequest(BaseModel):
     question: str
 
 
+class UnifiedSearchRequest(BaseModel):
+    query: str
+    pdf_names: Optional[list[str]] = None
+
+
+class UnifiedFollowupRequest(BaseModel):
+    question: str
+    context: str
+    sources_json: str
+
+
 class CreateSessionRequest(BaseModel):
     name: Optional[str] = None
 
@@ -2588,6 +2599,319 @@ async def translate_status(job_id: str) -> JSONResponse:
 async def translate_html_file(job_id: str) -> JSONResponse:
     # Kept for backward compatibility — returns a stub response.
     return JSONResponse(content={"status": "deprecated"})
+
+
+# ---------------------------------------------------------------------------
+# Unified Search (문서 검색) — combines table + text search
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/unified-search")
+async def unified_search_endpoint(
+    body: UnifiedSearchRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+
+    # Ensure text chunks are indexed
+    if not session.get("document_chunks_ready"):
+        _chunk_and_index_session(x_session_id or "")
+
+    embeddings = _get_embeddings()
+    queue: list[str] = []
+
+    def progress_callback(phase: str, message: str, pct: int) -> None:
+        event_data = json.dumps(
+            {"phase": phase, "message": message, "pct": pct},
+            ensure_ascii=False,
+        )
+        queue.append(f"event: progress\ndata: {event_data}\n\n")
+
+    def generate():
+        try:
+            # --- Phase 1: Vector search on pdf_tables ---
+            progress_callback("vector", "문서 검색 중...", 20)
+            table_store = TableVectorStore(
+                embeddings=embeddings,
+                persist_dir=session["chroma_dir"],
+            )
+            table_results = table_store.similarity_search(query=body.query, k=10)
+            table_candidates = _format_results(table_results)
+
+            # --- Phase 2: Hybrid search on doc_chunks ---
+            progress_callback("text", "텍스트 검색 중...", 40)
+            doc_store = TableVectorStore(
+                embeddings=embeddings,
+                persist_dir=session["doc_chunks_dir"],
+                collection_name=f"doc_chunks_{x_session_id}",
+            )
+            doc_vector_results = doc_store.similarity_search(query=body.query, k=8)
+
+            # BM25 keyword search
+            bm25 = session.get("bm25_index")
+            bm25_chunks: list[str] = session.get("bm25_chunks", [])
+            bm25_metadatas: list[dict] = session.get("bm25_metadatas", [])
+
+            bm25_results: list[tuple[int, float]] = []
+            if bm25 and bm25_chunks:
+                tokenized_query = _tokenize_korean(body.query)
+                scores = bm25.get_scores(tokenized_query)
+                top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:8]
+                bm25_results = [(idx, scores[idx]) for idx in top_indices if scores[idx] > 0]
+
+            # RRF fusion for text chunks
+            rrf_k = 60
+            rrf_scores: dict[int, float] = {}
+
+            for rank, (doc, _score) in enumerate(doc_vector_results):
+                chunk_text = doc.page_content
+                for idx, c in enumerate(bm25_chunks):
+                    if c == chunk_text:
+                        rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                        break
+                else:
+                    idx = len(bm25_chunks)
+                    bm25_chunks.append(chunk_text)
+                    bm25_metadatas.append(doc.metadata)
+                    rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+
+            for rank, (idx, _score) in enumerate(bm25_results):
+                rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+
+            fused_indices = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:5]
+
+            # --- Phase 3: Build context for LLM ---
+            progress_callback("llm", "AI 분석 중...", 70)
+
+            context_parts = []
+            all_sources: list[dict] = []
+
+            for i, idx in enumerate(fused_indices):
+                chunk_text = bm25_chunks[idx]
+                meta = bm25_metadatas[idx] if idx < len(bm25_metadatas) else {}
+                context_parts.append(f"[텍스트출처{i+1}] {chunk_text}")
+                all_sources.append({
+                    "type": "text",
+                    "pdf": meta.get("source_pdf", ""),
+                    "page_number": meta.get("page_number", 1),
+                    "text": chunk_text[:300],
+                    "chunk_index": meta.get("chunk_index", 0),
+                })
+
+            # Add top table summaries
+            top_tables = table_candidates[:3]
+            table_context_parts = []
+            for i, tbl in enumerate(top_tables):
+                title = tbl.table_title or "(제목 없음)"
+                summary = (tbl.table_html or "")[:300]
+                context_parts.append(f"[표출처{i+1}] 제목: {title}\n{summary}")
+                table_context_parts.append(tbl)
+                all_sources.append({
+                    "type": "table",
+                    "pdf": tbl.document_name,
+                    "page_number": tbl.page_number,
+                    "text": title,
+                    "table_id": tbl.table_id,
+                })
+
+            context_text = "\n\n---\n\n".join(context_parts)
+
+            system_prompt = (
+                "당신은 전문적인 금융 문서 분석 어시스턴트입니다. "
+                "아래 [텍스트출처N]과 [표출처N]으로 표시된 문서 내용을 기반으로 질문에 답변하세요.\n\n"
+                "규칙:\n"
+                "1. 문서에 없는 내용은 추측하지 마세요\n"
+                "2. 구체적인 수치, 날짜, 업체명 등을 정확히 인용하세요\n"
+                "3. 한국어로 마크다운 형식으로 답변하세요\n"
+                "4. HTML 태그를 사용하지 마세요\n"
+                "5. 출처 번호를 [텍스트출처N] 또는 [표출처N] 형식으로 본문에 인용하세요\n"
+                "6. 답변 마지막 줄에 '사용출처: 텍스트1,표2' 형식으로 사용한 출처만 표시하세요"
+            )
+
+            user_prompt = (
+                f"질문: {body.query}\n\n"
+                f"참고 문서 내용:\n{context_text[:8000]}\n\n"
+                f"답변:"
+            )
+
+            # --- Phase 4: LLM streaming ---
+            import time as _time
+            client = ZaiLLMClient(max_retries=2)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            max_attempts = 5
+            accumulated = ""
+            for attempt in range(max_attempts):
+                try:
+                    for chunk in client._llm.stream(messages):
+                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                        if token:
+                            accumulated += token
+                    break
+                except Exception as stream_exc:
+                    err_msg = str(stream_exc)
+                    if "429" in err_msg and attempt < max_attempts - 1:
+                        wait = 15 * (attempt + 1)
+                        _time.sleep(wait)
+                        accumulated = ""
+                        continue
+                    raise
+
+            # --- Phase 5: Parse sources and build result ---
+            progress_callback("done", "검색 완료!", 100)
+
+            for evt in queue:
+                yield evt
+
+            # Parse 사용출처
+            used_text_indices: list[int] = []
+            used_table_indices: list[int] = []
+            used_match = re.search(r'사용출처:\s*(.+)', accumulated)
+            if used_match:
+                for part in used_match.group(1).split(','):
+                    part = part.strip()
+                    if part.startswith('텍스트'):
+                        num_str = re.search(r'\d+', part)
+                        if num_str:
+                            used_text_indices.append(int(num_str.group()) - 1)
+                    elif part.startswith('표'):
+                        num_str = re.search(r'\d+', part)
+                        if num_str:
+                            used_table_indices.append(int(num_str.group()) - 1)
+
+            # Filter sources to only used ones (or all if parsing failed)
+            if used_text_indices or used_table_indices:
+                filtered_sources = []
+                for src in all_sources:
+                    if src["type"] == "text":
+                        idx = next((i for i, s in enumerate(all_sources) if s is src), -1)
+                        if idx in used_text_indices:
+                            filtered_sources.append(src)
+                    elif src["type"] == "table":
+                        idx = next((i for i, s in enumerate(all_sources) if s is src and s["type"] == "table"), -1)
+                        if idx in used_table_indices:
+                            filtered_sources.append(src)
+            else:
+                filtered_sources = all_sources
+
+            # Serialize tables referenced in answer
+            referenced_tables = []
+            for i, tbl in enumerate(table_context_parts):
+                if not used_table_indices or i in used_table_indices:
+                    referenced_tables.append(_serialize_table(tbl))
+
+            result_data = json.dumps({
+                "answer": accumulated,
+                "tables": referenced_tables,
+                "sources": filtered_sources,
+            }, ensure_ascii=False)
+            yield f"event: result\ndata: {result_data}\n\n"
+
+        except Exception as exc:
+            for evt in queue:
+                yield evt
+            error_data = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/unified-followup")
+async def unified_followup_endpoint(
+    body: UnifiedFollowupRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+
+    # Parse previous sources
+    try:
+        prev_sources = json.loads(body.sources_json) if body.sources_json else []
+    except Exception:
+        prev_sources = []
+
+    # Build context from previous answer + sources
+    source_texts = []
+    for src in prev_sources:
+        src_type = "텍스트" if src.get("type") == "text" else "표"
+        pdf = src.get("pdf", "")
+        page = src.get("page_number", "")
+        text = src.get("text", "")
+        source_texts.append(f"[{src_type}출처 - {pdf} p.{page}] {text}")
+
+    context_block = "\n\n".join(source_texts)
+
+    system_prompt = (
+        "당신은 전문적인 금융 문서 분석 어시스턴트입니다. "
+        "이전 검색 결과를 바탕으로 추가 질문에 답변하세요.\n\n"
+        "규칙:\n"
+        "1. 이전 답변과 출처를 기반으로 답변하세요\n"
+        "2. 문서에 없는 내용은 추측하지 마세요\n"
+        "3. 한국어로 마크다운 형식으로 답변하세요\n"
+        "4. HTML 태그를 사용하지 마세요"
+    )
+
+    user_prompt = (
+        f"이전 답변:\n{body.context}\n\n"
+        f"이전 출처:\n{context_block}\n\n"
+        f"추가 질문: {body.question}\n\n"
+        f"답변:"
+    )
+
+    def generate():
+        try:
+            import time as _time
+            client = ZaiLLMClient(max_retries=2)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            max_attempts = 5
+            accumulated = ""
+            for attempt in range(max_attempts):
+                try:
+                    for chunk in client._llm.stream(messages):
+                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                        if token:
+                            accumulated += token
+                            data = json.dumps({"token": token}, ensure_ascii=False)
+                            yield f"data: {data}\n\n"
+                    break
+                except Exception as stream_exc:
+                    err_msg = str(stream_exc)
+                    if "429" in err_msg and attempt < max_attempts - 1:
+                        wait = 15 * (attempt + 1)
+                        yield f"data: {json.dumps({'token': f'[재시도 중... {wait}초 대기 ({attempt+1}/{max_attempts})]'}, ensure_ascii=False)}\n\n"
+                        _time.sleep(wait)
+                        accumulated = ""
+                        continue
+                    raise
+
+            yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            data = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 _static_dir = Path(__file__).resolve().parent.parent / "web" / "dist"
