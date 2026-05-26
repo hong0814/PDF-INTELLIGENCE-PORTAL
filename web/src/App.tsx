@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProgressEvent } from './types';
+import type { ProgressEvent, TableGroupSuggestion } from './types';
 import * as api from './api/client';
 import { BASE } from './api/client';
 import { useAppStore } from './store/useAppStore';
@@ -13,6 +13,8 @@ import SessionHeader from './components/SessionHeader';
 import DocumentViewer from './components/DocumentViewer';
 import CreditReviewView from './components/CreditReviewView';
 import QAPanel from './components/QAPanel';
+import TranslationView from './components/TranslationView';
+import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
 
 export default function App() {
   const sessionId = useAppStore((s) => s.sessionId);
@@ -42,6 +44,7 @@ export default function App() {
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [showProgress, setShowProgress] = useState(false);
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
@@ -54,12 +57,13 @@ export default function App() {
       const data = await res.json();
       if (data.session_id) {
         localStorage.setItem('pdftablesearch_session_id', data.session_id);
-        window.location.reload();
+        did404Ref.current = false;
+        setSession(data.session_id, data.name || name);
       }
     } catch (e) {
       alert('세션 생성 실패');
     }
-  }, []);
+  }, [setSession]);
 
   useEffect(() => {
     if (!sessionId || did404Ref.current) return;
@@ -99,6 +103,20 @@ export default function App() {
   const handleDeletePdf = useCallback(async (name: string) => {
     await api.deletePdf(name, sessionId);
     removePdf(name);
+    const state = useAppStore.getState();
+    const filteredResults = state.results.filter((r) => r.document_name !== name);
+    const filteredSmart = state.smartResult && state.smartResult.result.document_name !== name
+      ? state.smartResult : null;
+    const filteredQA = state.qaMessages.filter((m) => {
+      const sources = (m as { sources?: { document_name?: string }[] }).sources;
+      if (!sources) return true;
+      return !sources.some((s) => s.document_name === name);
+    });
+    useAppStore.setState({
+      results: filteredResults,
+      smartResult: filteredSmart,
+      qaMessages: filteredQA,
+    });
   }, [sessionId, removePdf]);
 
   const handleMainUpload = useCallback(async (files: FileList) => {
@@ -116,6 +134,9 @@ export default function App() {
     try {
       const result = await api.uploadPdfs(pdfFiles, sessionId);
       handleUploadComplete(result.session_id, result.pdfs, result.total_tables, result.total_pages ?? 0);
+      if (result.table_group_suggestions && result.table_group_suggestions.length > 0) {
+        setTableGroupSuggestions(result.table_group_suggestions);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Session not found') || msg.includes('404')) {
@@ -266,6 +287,9 @@ export default function App() {
       case 'qa':
         return <QAPanel />;
 
+      case 'translation':
+        return <TranslationView />;
+
       case 'credit':
         return <CreditReviewView />;
     }
@@ -310,6 +334,13 @@ export default function App() {
           {renderContent()}
         </main>
       </div>
+
+      {tableGroupSuggestions.length > 0 && (
+        <TableGroupSuggestionPopup
+          suggestions={tableGroupSuggestions}
+          onComplete={() => setTableGroupSuggestions([])}
+        />
+      )}
     </div>
   );
 }

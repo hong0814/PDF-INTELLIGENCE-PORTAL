@@ -22,6 +22,9 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   const [currentSession, setCurrentSession] = useState<SessionInfo | null>(null);
   const isUploading = useAppStore((s) => s.isUploading);
   const setStoreUploading = useAppStore((s) => s.setUploading);
+  const collapsed = useAppStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const setSession = useAppStore((s) => s.setSession);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refreshCurrentSession = useCallback(() => {
@@ -130,19 +133,43 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   }, []);
 
   return (
-    <aside className="w-[280px] min-w-[280px] bg-sidebar text-white flex flex-col h-full overflow-y-auto">
-      <div className="px-4 pt-5 pb-4 border-b border-white/10">
+    <aside className={`${collapsed ? 'w-[48px] min-w-[48px]' : 'w-[280px] min-w-[280px]'} bg-sidebar text-white flex flex-col h-full overflow-y-auto transition-all duration-200`}>
+      <div className={`pt-5 pb-4 border-b border-white/10 ${collapsed ? 'px-2' : 'px-4'}`}>
         <div className="flex items-center gap-2.5 mb-1.5">
-          <svg className="w-6 h-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          <span className="font-bold text-sm">PDF Intelligence Portal</span>
+          {!collapsed && (
+            <svg className="w-6 h-6 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          )}
+          {!collapsed && <span className="font-bold text-sm">PDF Intelligence Portal</span>}
+          <button
+            onClick={toggleSidebar}
+            className={`${collapsed ? 'mx-auto' : 'ml-auto'} p-1.5 rounded hover:bg-white/10 transition-colors flex-shrink-0`}
+            title={collapsed ? '사이드바 펼치기' : '사이드바 접기'}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              {collapsed
+                ? <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                : <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+              }
+            </svg>
+          </button>
         </div>
-        <p className="text-[11px] text-white/40">AI 기반 문서 분석 & 질의응답</p>
+        {!collapsed && <p className="text-[11px] text-white/40">AI 기반 문서 분석 & 질의응답</p>}
       </div>
 
-      <div className="p-4 pt-5">
-        <h2 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">PDF 관리</h2>
+      {collapsed ? (
+        <div className="flex flex-col items-center py-3 gap-2">
+          {pdfs.map((pdf) => (
+            <div key={pdf.name} className="w-8 h-8 rounded bg-white/10 flex items-center justify-center text-[10px] font-bold" title={pdf.name}>
+              {pdf.name.charAt(0).toUpperCase()}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+        <div className="p-4 pt-5">
+          <h2 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">PDF 관리</h2>
 
         <div
           onDragOver={handleDragOver}
@@ -268,9 +295,9 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
           {sessions.length > 0 && (
             <ul className="space-y-1 mb-3">
               {sessions.map((session) => (
-                <li key={session.session_id} className="group">
+                <li key={session.session_id} className="group relative">
                   <button
-                    className="w-full text-left bg-white/5 hover:bg-white/10 rounded-md px-3 py-2 transition-colors"
+                    className="w-full text-left bg-white/5 hover:bg-white/10 rounded-md px-3 py-2 transition-colors pr-8"
                     onClick={() => { window.location.href = `/?session=${session.session_id}`; }}
                   >
                     <p className="text-sm truncate text-white/90">{session.name}</p>
@@ -290,6 +317,27 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
                         {session.pdf_names.join(', ')}
                       </p>
                     )}
+                  </button>
+                  <button
+                    className="absolute top-2 right-2 p-1 rounded hover:bg-red-500/30 text-white/0 group-hover:text-white/50 hover:!text-red-400 transition-colors"
+                    title="세션 삭제"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!confirm(`"${session.name}" 세션을 삭제할까요?`)) return;
+                      try {
+                        await fetch(`${BASE}/sessions/${session.session_id}`, { method: 'DELETE' });
+                        if (session.session_id === sessionId) {
+                          localStorage.removeItem('pdftablesearch_session_id');
+                          setSession('', '');
+                        }
+                        const data = await api.getSessions();
+                        setSessions(data.sessions ?? []);
+                      } catch { alert('삭제 실패'); }
+                    }}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
                   </button>
                 </li>
               ))}
@@ -343,9 +391,11 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
           </div>
         )}
       </div>
+      </>
+      )}
 
       <div className="p-3 border-t border-white/10 text-center">
-        <p className="text-[10px] text-white/30">PDF Intelligence Portal v0.1.0</p>
+        <p className="text-[10px] text-white/30">{collapsed ? '' : 'PDF Intelligence Portal v0.1.0'}</p>
       </div>
     </aside>
   );

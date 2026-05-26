@@ -9,7 +9,7 @@ interface Props {
   message: QAMessage;
 }
 
-type PopupSource = { pdf: string; page_number: number; text: string };
+type PopupSource = { pdf: string; page_number: number; paragraph_id?: string; text: string };
 
 function ChunkPopup({ source, onClose }: { source: PopupSource; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
