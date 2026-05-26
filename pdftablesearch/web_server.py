@@ -207,6 +207,138 @@ def _tokenize_korean(text: str) -> list[str]:
     return tokens
 
 
+# ---------------------------------------------------------------------------
+# Paragraph-based HTML chunker
+# ---------------------------------------------------------------------------
+
+_BLOCK_TAGS = frozenset([
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "li", "blockquote", "pre", "div",
+])
+
+_PARA_MIN_CHARS = 100
+_PARA_MAX_CHARS = 1500
+
+
+def _extract_blocks_from_html(page_html: str) -> list[str]:
+    """Extract top-level text blocks from page HTML using BeautifulSoup.
+
+    Returns a list of plain-text strings, one per semantic block.
+    Tables (<table>) are excluded since they are indexed separately.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(page_html, "html.parser")
+
+    for tag in soup.find_all("table"):
+        tag.decompose()
+
+    blocks: list[str] = []
+
+    for child in soup.children:
+        if not hasattr(child, "name") or child.name is None:
+            text = str(child).strip()
+            if text:
+                blocks.append(text)
+            continue
+
+        tag_name = child.name.lower()
+
+        if tag_name == "table":
+            continue
+
+        if tag_name in _BLOCK_TAGS:
+            text = child.get_text(separator=" ", strip=True)
+            if text:
+                blocks.append(text)
+        elif tag_name in ("ul", "ol"):
+            for li in child.find_all("li", recursive=False):
+                text = li.get_text(separator=" ", strip=True)
+                if text:
+                    blocks.append(text)
+        else:
+            text = child.get_text(separator=" ", strip=True)
+            if text:
+                blocks.append(text)
+
+    return blocks
+
+
+def _split_long_text(text: str, max_chars: int = _PARA_MAX_CHARS) -> list[str]:
+    """Split a single text into pieces at sentence boundaries.
+
+    Tries to split on Korean/English sentence endings (。, ., \n).
+    Falls back to word boundaries, then hard cut.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    pieces: list[str] = []
+    remaining = text
+
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars]
+        split_pos = -1
+
+        for sep in ["。", ".", "다.", "음.", "임.", "\n", " "]:
+            idx = window.rfind(sep)
+            if idx > max_chars * 0.3:
+                split_pos = idx + len(sep)
+                break
+
+        if split_pos <= 0:
+            split_pos = max_chars
+
+        pieces.append(remaining[:split_pos].strip())
+        remaining = remaining[split_pos:].strip()
+
+    if remaining:
+        pieces.append(remaining)
+
+    return pieces
+
+
+def _split_html_by_paragraphs(
+    page_html: str,
+    pdf_name: str,
+    page_num: int,
+) -> list[tuple[str, str]]:
+    """Split page HTML into paragraph-based chunks.
+
+    Returns list of (chunk_text, paragraph_id) tuples.
+    paragraph_id format: ``{pdf_name}_p{page_num}_para{n}``
+    """
+    raw_blocks = _extract_blocks_from_html(page_html)
+
+    if not raw_blocks:
+        return []
+
+    merged: list[str] = []
+    for block in raw_blocks:
+        if merged and len(block) < _PARA_MIN_CHARS:
+            merged[-1] = merged[-1] + " " + block
+        else:
+            merged.append(block)
+
+    final_blocks: list[str] = []
+    for block in merged:
+        final_blocks.extend(_split_long_text(block))
+
+    result: list[tuple[str, str]] = []
+    safe_pdf = re.sub(r"[^a-zA-Z0-9가-힣_-]", "_", pdf_name)
+    for i, text in enumerate(final_blocks):
+        if not text.strip():
+            continue
+        para_id = f"{safe_pdf}_p{page_num}_para{i + 1}"
+        result.append((text.strip(), para_id))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Chunking & indexing
+# ---------------------------------------------------------------------------
+
 def _chunk_and_index_session(session_id: str) -> None:
     import shutil
 
@@ -216,7 +348,6 @@ def _chunk_and_index_session(session_id: str) -> None:
     if session.get("document_chunks_ready"):
         return
 
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
     from rank_bm25 import BM25Okapi
 
     PAGE_SEP_RE = re.compile(
@@ -225,14 +356,8 @@ def _chunk_and_index_session(session_id: str) -> None:
         re.IGNORECASE,
     )
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", "。", ".", " ", ""],
-    )
-
-    all_chunks = []
-    all_metadatas = []
+    all_chunks: list[str] = []
+    all_metadatas: list[dict] = []
 
     for pdf_name, pdf_info in session.get("pdfs", {}).items():
         html_path = pdf_info.get("html_path")
@@ -243,23 +368,24 @@ def _chunk_and_index_session(session_id: str) -> None:
 
         # Split HTML by page separators to preserve page boundaries
         parts = PAGE_SEP_RE.split(html_content)
+
         if len(parts) <= 1:
-            # No page separators found; fall back to whole-document chunking
-            text = re.sub(r'<table[^>]*>.*?</table>', '', html_content, flags=re.DOTALL)
-            text = re.sub(r'<[^>]+>', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
-            if not text:
-                continue
             pdf_page_count = pdf_info.get("page_count", 1)
-            chunks = splitter.split_text(text)
-            for i, chunk in enumerate(chunks):
-                page_estimate = max(1, int(i * pdf_page_count / max(len(chunks), 1)) + 1)
-                all_chunks.append(chunk)
+            para_chunks = _split_html_by_paragraphs(html_content, pdf_name, 1)
+            if not para_chunks:
+                continue
+            total = len(para_chunks)
+            for i, (text, para_id) in enumerate(para_chunks):
+                page_estimate = max(1, int(i * pdf_page_count / max(total, 1)) + 1)
+                all_chunks.append(text)
                 all_metadatas.append({
                     "source_pdf": pdf_name,
-                    "chunk_index": i,
+                    "chunk_index": len(all_metadatas),
                     "page_number": page_estimate,
                     "pdf_page_count": pdf_page_count,
+                    "paragraph_id": re.sub(
+                        r"_p\d+_para", f"_p{page_estimate}_para", para_id
+                    ),
                 })
             continue
 
@@ -272,20 +398,15 @@ def _chunk_and_index_session(session_id: str) -> None:
             page_html = parts[pi + 1] if pi + 1 < len(parts) else ""
             page_num = int(page_num_str)
 
-            text = re.sub(r'<table[^>]*>.*?</table>', '', page_html, flags=re.DOTALL)
-            text = re.sub(r'<[^>]+>', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
-            if not text:
-                continue
-
-            page_chunks = splitter.split_text(text)
-            for ci, chunk in enumerate(page_chunks):
-                all_chunks.append(chunk)
+            para_chunks = _split_html_by_paragraphs(page_html, pdf_name, page_num)
+            for text, para_id in para_chunks:
+                all_chunks.append(text)
                 all_metadatas.append({
                     "source_pdf": pdf_name,
                     "chunk_index": len(all_metadatas),
                     "page_number": page_num,
                     "pdf_page_count": pdf_page_count,
+                    "paragraph_id": para_id,
                 })
 
     if not all_chunks:
@@ -325,6 +446,691 @@ def _chunk_and_index_session(session_id: str) -> None:
             shutil.rmtree(old_dir, ignore_errors=True)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Multi-page table detection
+# ---------------------------------------------------------------------------
+
+_HEADER_KEYWORDS = frozenset([
+    "구분", "구 분", "계정", "주요계정", "연도", "종류", "항목", "구분",
+    "분류", "항목", "세목", "유형", "영업년도",
+])
+
+
+def _table_col_count(html: str) -> int:
+    m = re.search(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
+    return len(re.findall(r"<t[dh]", m.group(1))) if m else 0
+
+
+def _table_first_row(html: str) -> list[str]:
+    m = re.search(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
+    if not m:
+        return []
+    cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", m.group(1), re.DOTALL)
+    return [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+
+
+def _row_has_numbers(row: list[str]) -> bool:
+    combined = " ".join(row)
+    return bool(re.search(r"[\d,]+\.?\d*", combined))
+
+
+def _row_has_header_keywords(row: list[str]) -> bool:
+    combined = " ".join(row)
+    return any(kw in combined for kw in _HEADER_KEYWORDS)
+
+
+def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
+    try:
+        import fitz
+    except ImportError:
+        return
+
+    if not pdf_path or not tables:
+        return
+
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception:
+        return
+
+    PAGE_HEIGHT = 842.0
+    MAX_FITZ_TABLES = 200
+
+    by_page: dict[int, list[dict]] = {}
+    for t in tables:
+        pn = t.get("page_number", 0)
+        by_page.setdefault(pn, []).append(t)
+
+    used_fitz_global: set[tuple[int, int]] = set()
+
+    for pn, page_tables in by_page.items():
+        if pn < 1 or pn > len(doc):
+            continue
+
+        page = doc[pn - 1]
+        fitz_tables = page.find_tables().tables
+
+        fitz_data: list[tuple] = []
+        for fi, ft in enumerate(fitz_tables):
+            data = ft.extract()
+            ft_text = _normalize_text(" ".join(" ".join(str(c or "") for c in row) for row in data))
+            fitz_data.append((fi, ft, ft_text))
+
+        matched_fitz: set[int] = set()
+
+        for t in page_tables:
+            html_text = _normalize_text(_table_text_content(t.get("table_html", "")))
+            if not html_text:
+                continue
+
+            best_score = 0.0
+            best_fi = -1
+
+            for fi, ft, ft_text in fitz_data:
+                score = _table_match_score(html_text, ft_text)
+                if score > best_score:
+                    best_score = score
+                    best_fi = fi
+
+            if best_fi >= 0 and best_score > 0.15:
+                matched_fitz.add(best_fi)
+                ft = fitz_data[best_fi][1]
+                fbbox = list(ft.bbox)
+                pdf_bbox = [fbbox[0], PAGE_HEIGHT - fbbox[3], fbbox[2], PAGE_HEIGHT - fbbox[1]]
+
+                current_bbox = t.get("bounding_box", [])
+                if not current_bbox or current_bbox == [0, 0, 0, 0]:
+                    t["bounding_box"] = [round(v, 2) for v in pdf_bbox]
+
+                y_top_pymupdf = fbbox[1]
+                clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), 595, y_top_pymupdf)
+                text_above = page.get_text("text", clip=clip).strip()
+                if text_above and len(text_above) <= 150:
+                    last_line = text_above.split("\n")[-1].strip()
+                    if last_line and len(last_line) <= 80:
+                        if not t.get("table_title"):
+                            t["table_title"] = last_line
+
+                print(f"[enrich] {t.get('table_id')} p{pn}: matched fitz_t[{best_fi}] score={best_score:.2f}")
+
+        for fi, ft, ft_text in fitz_data:
+            if fi in matched_fitz:
+                continue
+            fbbox = list(ft.bbox)
+            fbbox_area = (fbbox[2] - fbbox[0]) * (fbbox[3] - fbbox[1])
+            if fbbox_area < 5000:
+                continue
+
+            is_inner = False
+            for fi2, ft2, _ in fitz_data:
+                if fi2 == fi:
+                    continue
+                obbox = list(ft2.bbox)
+                if (obbox[0] <= fbbox[0] and obbox[1] <= fbbox[1]
+                        and obbox[2] >= fbbox[2] and obbox[3] >= fbbox[3]):
+                    is_inner = True
+                    break
+            if is_inner:
+                continue
+
+            pdf_bbox = [fbbox[0], PAGE_HEIGHT - fbbox[3], fbbox[2], PAGE_HEIGHT - fbbox[1]]
+            data = ft.extract()
+            if not data:
+                continue
+
+            from bs4 import BeautifulSoup
+            html_parts = ["<table>"]
+            for ri, row in enumerate(data):
+                tag = "th" if ri == 0 else "td"
+                html_parts.append("<tr>" + "".join(f"<{tag}>{_escape_html(str(c or ''))}</{tag}>" for c in row) + "</tr>")
+            html_parts.append("</table>")
+            table_html = "".join(html_parts)
+
+            table_title = ""
+            y_top_pymupdf = fbbox[1]
+            clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), 595, y_top_pymupdf)
+            text_above = page.get_text("text", clip=clip).strip()
+            if text_above and len(text_above) <= 150:
+                last_line = text_above.split("\n")[-1].strip()
+                if last_line and len(last_line) <= 80:
+                    table_title = last_line
+
+            new_id = f"table_{pn}_fitz{fi}"
+            new_table = {
+                "table_id": new_id,
+                "page_number": pn,
+                "bounding_box": [round(v, 2) for v in pdf_bbox],
+                "table_html": table_html,
+                "table_title": table_title or None,
+                "document_name": tables[0].get("document_name", "") if tables else "",
+            }
+            tables.append(new_table)
+            print(f"[enrich] ADDED {new_id} p{pn}: bbox={new_table['bounding_box']} (PyMuPDF only, outer)")
+
+        if len(tables) > MAX_FITZ_TABLES:
+            print(f"[enrich] WARNING: too many tables ({len(tables)}), stopping PyMuPDF additions")
+            break
+
+    doc.close()
+
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _normalize_text(text: str) -> str:
+    import re
+    text = text.lower()
+    text = re.sub(r'\s+', '', text)
+    return text
+
+
+def _table_text_content(html: str) -> str:
+    from bs4 import BeautifulSoup
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        return soup.get_text(separator=" ", strip=True)
+    except Exception:
+        return ""
+
+
+def _table_match_score(html_norm: str, fitz_norm: str) -> float:
+    if not html_norm or not fitz_norm:
+        return 0.0
+    if fitz_norm in html_norm:
+        return 0.9
+    if html_norm in fitz_norm:
+        return 0.9
+    html_words = set(html_norm)
+    fitz_words = set(fitz_norm)
+    if not html_words or not fitz_words:
+        return 0.0
+    intersection = html_words & fitz_words
+    union = html_words | fitz_words
+    return len(intersection) / len(union)
+
+
+def _extract_top_level_tables_with_nesting(html_path: str) -> list[dict]:
+    from bs4 import BeautifulSoup
+    try:
+        with open(html_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception:
+        return []
+
+    soup = BeautifulSoup(content, "html.parser")
+    result = []
+    for table_tag in soup.find_all("table"):
+        parent = table_tag.parent
+        is_nested = False
+        p = parent
+        while p:
+            if p.name == "td":
+                pp = p.parent
+                while pp:
+                    if pp.name == "table" and pp != table_tag:
+                        is_nested = True
+                        break
+                    pp = pp.parent
+                if is_nested:
+                    break
+            p = p.parent
+        if is_nested:
+            continue
+
+        has_inner = bool(table_tag.find("table"))
+        text = _normalize_text(table_tag.get_text(separator=" ", strip=True))
+        result.append({
+            "html": str(table_tag),
+            "text": text,
+            "has_nested_table": has_inner,
+        })
+    return result
+
+
+def _build_tables_from_pymupdf(
+    pdf_path: str,
+    hybrid_tables: list[dict],
+    standard_html_path: str | None,
+) -> list[dict]:
+    try:
+        import fitz
+    except ImportError:
+        return hybrid_tables
+
+    if not pdf_path:
+        return hybrid_tables
+
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception:
+        return hybrid_tables
+
+    PAGE_HEIGHT = 842.0
+    doc_name = hybrid_tables[0].get("document_name", "") if hybrid_tables else ""
+
+    standard_tables: list[dict] = []
+    if standard_html_path:
+        standard_tables = _extract_top_level_tables_with_nesting(standard_html_path)
+    print(f"[build] standard HTML tables: {len(standard_tables)} (nested marked)")
+
+    hybrid_by_page: dict[int, list[dict]] = {}
+    for t in hybrid_tables:
+        pn = t.get("page_number", 0)
+        hybrid_by_page.setdefault(pn, []).append(t)
+
+    all_fitz: list[dict] = []
+    for page_idx in range(len(doc)):
+        pn = page_idx + 1
+        page = doc[page_idx]
+        fitz_tables = page.find_tables().tables
+
+        fitz_data = []
+        for fi, ft in enumerate(fitz_tables):
+            fbbox = list(ft.bbox)
+            area = (fbbox[2] - fbbox[0]) * (fbbox[3] - fbbox[1])
+            if area < 5000:
+                continue
+            data = ft.extract()
+            ft_text = _normalize_text(" ".join(" ".join(str(c or "") for c in row) for row in data))
+            pdf_bbox = [fbbox[0], PAGE_HEIGHT - fbbox[3], fbbox[2], PAGE_HEIGHT - fbbox[1]]
+            fitz_data.append({
+                "fi": fi, "ft": ft, "bbox": fbbox, "pdf_bbox": pdf_bbox,
+                "area": area, "text": ft_text, "data": data, "page": pn,
+            })
+
+        inner_indices = set()
+        for i, fd in enumerate(fitz_data):
+            for j, fd2 in enumerate(fitz_data):
+                if i == j:
+                    continue
+                b1, b2 = fd["bbox"], fd2["bbox"]
+                if (b2[0] <= b1[0] and b2[1] <= b1[1] and b2[2] >= b1[2] and b2[3] >= b1[3]):
+                    inner_indices.add(i)
+
+        for i, fd in enumerate(fitz_data):
+            fd["is_inner"] = i in inner_indices
+            all_fitz.append(fd)
+
+    doc.close()
+
+    outer_fitz = [f for f in all_fitz if not f["is_inner"]]
+    inner_fitz = [f for f in all_fitz if f["is_inner"]]
+
+    for o in outer_fitz:
+        o["inner_table_indices"] = []
+    for idx, inn in enumerate(inner_fitz):
+        for oi, o in enumerate(outer_fitz):
+            ob = o["bbox"]
+            ib = inn["bbox"]
+            if (ob[0] <= ib[0] and ob[1] <= ib[1] and ob[2] >= ib[2] and ob[3] >= ib[3]
+                    and o["page"] == inn["page"]):
+                o["inner_table_indices"].append(idx)
+                break
+
+    results: list[dict] = []
+    matched_hybrid: set[int] = set()
+    matched_standard: set[int] = set()
+
+    for oi, o in enumerate(outer_fitz):
+        has_inner = len(o["inner_table_indices"]) > 0
+        table_html = ""
+        source = "none"
+
+        if has_inner and standard_tables:
+            best_score = 0.0
+            best_si = -1
+            for si, st in enumerate(standard_tables):
+                if not st["has_nested_table"]:
+                    continue
+                if si in matched_standard:
+                    continue
+                score = _table_match_score(o["text"], st["text"])
+                if score > best_score:
+                    best_score = score
+                    best_si = si
+            if best_si >= 0 and best_score > 0.10:
+                table_html = standard_tables[best_si]["html"]
+                matched_standard.add(best_si)
+                source = "standard"
+                print(f"[build] outer p{o['page']} fitz[{o['fi']}] → standard[{best_si}] score={best_score:.2f} (nested)")
+
+        if not table_html:
+            best_score = 0.0
+            best_ht = None
+            page_hybrid = hybrid_by_page.get(o["page"], [])
+            for hi, ht in enumerate(page_hybrid):
+                html_text = _normalize_text(_table_text_content(ht.get("table_html", "")))
+                score = _table_match_score(html_text, o["text"])
+                if score > best_score:
+                    best_score = score
+                    best_ht = ht
+            if best_ht and best_score > 0.10:
+                table_html = best_ht.get("table_html", "")
+                source = "hybrid"
+                print(f"[build] outer p{o['page']} fitz[{o['fi']}] → hybrid score={best_score:.2f}")
+
+        if not table_html:
+            data = o.get("data", [])
+            if data:
+                html_parts = ["<table>"]
+                for ri, row in enumerate(data):
+                    tag = "th" if ri == 0 else "td"
+                    html_parts.append("<tr>" + "".join(f"<{tag}>{_escape_html(str(c or ''))}</{tag}>" for c in row) + "</tr>")
+                html_parts.append("</table>")
+                table_html = "".join(html_parts)
+                source = "pymupdf"
+                print(f"[build] outer p{o['page']} fitz[{o['fi']}] → pymupdf fallback")
+
+        title = ""
+        try:
+            page_doc = fitz.open(pdf_path)
+            page = page_doc[o["page"] - 1]
+            y_top = o["bbox"][1]
+            clip = fitz.Rect(0, max(0, y_top - 50), 595, y_top)
+            text_above = page.get_text("text", clip=clip).strip()
+            if text_above and len(text_above) <= 150:
+                last_line = text_above.split("\n")[-1].strip()
+                if last_line and len(last_line) <= 80:
+                    title = last_line
+            page_doc.close()
+        except Exception:
+            pass
+
+        inner_ids = []
+        for inner_idx in o.get("inner_table_indices", []):
+            inner_ids.append(f"fitz_p{inner_fitz[inner_idx]['page']}_{inner_fitz[inner_idx]['fi']}_inner")
+
+        results.append({
+            "table_id": f"fitz_p{o['page']}_{o['fi']}",
+            "page_number": o["page"],
+            "bounding_box": [round(v, 2) for v in o["pdf_bbox"]],
+            "table_html": table_html,
+            "table_title": title or None,
+            "document_name": doc_name,
+            "has_inner_tables": has_inner,
+            "is_inner": False,
+            "outer_table_id": None,
+            "inner_table_ids": inner_ids,
+            "_source": source,
+        })
+
+    print(f"[build] RESULT: {len(results)} outer tables "
+          f"(standard={sum(1 for r in results if r['_source']=='standard')}, "
+          f"hybrid={sum(1 for r in results if r['_source']=='hybrid')}, "
+          f"pymupdf={sum(1 for r in results if r['_source']=='pymupdf')})")
+    return results
+
+
+def _detect_multipage_tables(
+    tables: list[dict],
+) -> list[dict]:
+    by_page: dict[int, list[dict]] = {}
+    for t in tables:
+        pn = t.get("page_number", -1)
+        by_page.setdefault(pn, []).append(t)
+
+    def _bbox_contains(outer: list, inner: list) -> bool:
+        if len(outer) < 4 or len(inner) < 4:
+            return False
+        return (outer[0] <= inner[0] and outer[1] <= inner[1]
+                and outer[2] >= inner[2] and outer[3] >= inner[3])
+
+    def _is_inner_table(t: dict, page_tables: list[dict]) -> bool:
+        bbox = t.get("bounding_box", [])
+        if len(bbox) < 4:
+            return False
+        for other in page_tables:
+            if other["table_id"] == t["table_id"]:
+                continue
+            other_bbox = other.get("bounding_box", [])
+            if _bbox_contains(other_bbox, bbox):
+                return True
+        return False
+
+    filtered_by_page: dict[int, list[dict]] = {}
+    for pn, page_tables in by_page.items():
+        outer = [t for t in page_tables if not _is_inner_table(t, page_tables)]
+        filtered_by_page[pn] = outer
+        inner_ids = [t["table_id"] for t in page_tables if _is_inner_table(t, page_tables)]
+        if inner_ids:
+            print(f"[multipage] page={pn}: filtered out inner tables: {inner_ids}")
+
+    raw_pairs: list[tuple[str, str, bool]] = []
+    sorted_pages = sorted(filtered_by_page.keys())
+
+    for pa in sorted_pages:
+        for t in filtered_by_page[pa]:
+            print(f"[multipage] table={t.get('table_id')} page={pa} bbox={t.get('bounding_box')}")
+
+    for pi in range(len(sorted_pages) - 1):
+        pa, pb = sorted_pages[pi], sorted_pages[pi + 1]
+        if pb != pa + 1:
+            continue
+
+        tables_a = filtered_by_page.get(pa, [])
+        tables_b = filtered_by_page.get(pb, [])
+        if not tables_a or not tables_b:
+            continue
+
+        last_on_a = min(tables_a, key=lambda t: t.get("bounding_box", [0, 9999])[3])
+        first_on_b = max(tables_b, key=lambda t: t.get("bounding_box", [0, 0, 0, 0])[1])
+
+        bbox_a = last_on_a.get("bounding_box", [0, 0, 0, 0])
+        bbox_b = first_on_b.get("bounding_box", [0, 0, 0, 0])
+        if len(bbox_a) < 4 or len(bbox_b) < 4:
+            continue
+
+        a_near_bottom = bbox_a[1] < 200
+        b_near_top = bbox_b[3] > 650
+
+        if not (a_near_bottom and b_near_top):
+            print(f"[multipage] p{pa}→p{pb}: skipped, last_a bottom={bbox_a[1]:.0f}({'✓' if a_near_bottom else '✗'}), first_b top={bbox_b[3]:.0f}({'✓' if b_near_top else '✗'})")
+            continue
+
+        html_a = last_on_a.get("table_html", "") or last_on_a.get("html", "")
+        html_b = first_on_b.get("table_html", "") or first_on_b.get("html", "")
+        if not html_a or not html_b:
+            continue
+
+        cols_a = _table_col_count(html_a)
+        cols_b = _table_col_count(html_b)
+        same_cols = cols_a == cols_b and cols_a > 0
+
+        raw_pairs.append((last_on_a["table_id"], first_on_b["table_id"], same_cols))
+
+        print(
+            f"[multipage] {last_on_a['table_id']}@p{pa}(cols={cols_a})"
+            f" -> {first_on_b['table_id']}@p{pb}(cols={cols_b})"
+            f" same_cols={same_cols}"
+        )
+
+    # Transitive closure: A→B, B→C => chain [A, B, C]
+    chains: list[list[str]] = []
+    table_to_chain: dict[str, int] = {}
+
+    for aid, bid, _ in raw_pairs:
+        a_chain = table_to_chain.get(aid)
+        b_chain = table_to_chain.get(bid)
+
+        if a_chain is not None and b_chain is not None:
+            if a_chain == b_chain:
+                continue
+            src, dst = (b_chain, a_chain) if len(chains[a_chain]) >= len(chains[b_chain]) else (a_chain, b_chain)
+            for tid in chains[src]:
+                table_to_chain[tid] = dst
+            chains[dst].extend(chains[src])
+            chains[src] = []
+        elif a_chain is not None:
+            chains[a_chain].append(bid)
+            table_to_chain[bid] = a_chain
+        elif b_chain is not None:
+            chains[b_chain].insert(0, aid)
+            table_to_chain[aid] = b_chain
+        else:
+            idx = len(chains)
+            chains.append([aid, bid])
+            table_to_chain[aid] = idx
+            table_to_chain[bid] = idx
+
+    chains = [c for c in chains if len(c) >= 2]
+
+    by_id = {t["table_id"]: t for t in tables}
+
+    results: list[dict] = []
+    for ci, chain in enumerate(chains):
+        gid = f"group_{ci}"
+
+        pair_cols: list[tuple[bool, int, int]] = []
+        for i in range(len(chain) - 1):
+            ta = by_id.get(chain[i], {})
+            tb = by_id.get(chain[i + 1], {})
+            html_a = ta.get("table_html", "") or ta.get("html", "")
+            html_b = tb.get("table_html", "") or tb.get("html", "")
+            cols_a = _table_col_count(html_a) if html_a else 0
+            cols_b = _table_col_count(html_b) if html_b else 0
+            pair_cols.append((cols_a == cols_b and cols_a > 0, cols_a, cols_b))
+
+        all_same = all(sc for sc, _, _ in pair_cols)
+
+        tables_info = []
+        for tid in chain:
+            t = by_id.get(tid, {})
+            tables_info.append({
+                "table_id": tid,
+                "page_number": t.get("page_number"),
+                "bounding_box": t.get("bounding_box", []),
+                "table_title": t.get("table_title"),
+                "table_html": t.get("table_html", ""),
+            })
+
+        results.append({
+            "group_id": gid,
+            "tables": tables_info,
+            "chain_length": len(chain),
+            "same_cols": all_same,
+            "pair_cols": pair_cols,
+        })
+
+        print(f"[multipage] chain {gid}: {' -> '.join(chain)} (all_same_cols={all_same})")
+
+    print(f"[multipage] RESULT: {len(raw_pairs)} pairs -> {len(chains)} chains")
+    return results
+
+
+def _apply_table_groups(
+    session: dict, pdf_name: str, tier1: list[tuple[str, str, str]],
+    tier2_confirmed: list[tuple[str, str, str]],
+) -> None:
+    tables = session["pdfs"][pdf_name].get("tables", [])
+    by_id = {t["table_id"]: t for t in tables}
+
+    for pairs in (tier1, tier2_confirmed):
+        for aid, bid, gid in pairs:
+            if aid in by_id:
+                by_id[aid]["group_id"] = gid
+            if bid in by_id:
+                by_id[bid]["group_id"] = gid
+
+
+def _merge_grouped_tables(tables: list[dict]) -> None:
+    from bs4 import BeautifulSoup
+
+    groups: dict[str, list[dict]] = {}
+    for t in tables:
+        gid = t.get("group_id")
+        if gid:
+            groups.setdefault(gid, []).append(t)
+
+    for gid, group_tables in groups.items():
+        if len(group_tables) < 2:
+            continue
+
+        group_table_ids = [t["table_id"] for t in group_tables]
+
+        soup_a = BeautifulSoup(group_tables[0].get("table_html", ""), "html.parser")
+        table_a = soup_a.find("table")
+        if not table_a:
+            continue
+
+        for tb in group_tables[1:]:
+            soup_b = BeautifulSoup(tb.get("table_html", ""), "html.parser")
+            table_b = soup_b.find("table")
+            if not table_b:
+                continue
+
+            rows_b = table_b.find_all("tr")
+            cols_a = len(table_a.find("tr").find_all(["td", "th"])) if table_a.find("tr") else 0
+
+            for row in rows_b:
+                cells = row.find_all(["td", "th"])
+                if cols_a > 0 and len(cells) == cols_a:
+                    is_header = all(c.name == "th" for c in cells if c.get_text(strip=True))
+                    if is_header:
+                        continue
+                table_a.append(row)
+
+        merged_html = str(soup_a)
+
+        for t in group_tables:
+            t["merged_table_html"] = merged_html
+            t["group_table_ids"] = group_table_ids
+
+
+class ConfirmGroupRequest(BaseModel):
+    pdf_name: str
+    confirmed: list[dict]
+    rejected: list[dict]
+
+
+@app.post("/api/confirm-table-groups")
+async def confirm_table_groups(
+    body: ConfirmGroupRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    session = _get_session(x_session_id)
+    pdf_name = body.pdf_name
+    if pdf_name not in session.get("pdfs", {}):
+        raise HTTPException(status_code=404, detail=f"PDF '{pdf_name}' not found")
+
+    tables = session["pdfs"][pdf_name].get("tables", [])
+    by_id = {t["table_id"]: t for t in tables}
+
+    for c in body.confirmed:
+        gid = c.get("group_id", "")
+        chain_ids = c.get("table_ids", [])
+        if not chain_ids:
+            continue
+
+        for tid in chain_ids:
+            if tid in by_id:
+                by_id[tid]["group_id"] = gid
+
+        first = by_id.get(chain_ids[0])
+        if first and first.get("table_title"):
+            for tid in chain_ids[1:]:
+                t = by_id.get(tid)
+                if t and not t.get("table_title"):
+                    t["table_title"] = first["table_title"]
+
+    _merge_grouped_tables(tables)
+
+    merged_results = []
+    confirmed_ids = set()
+    for c in body.confirmed:
+        for tid in c.get("table_ids", []):
+            confirmed_ids.add(tid)
+    for t in tables:
+        if t.get("merged_table_html") and t["table_id"] in confirmed_ids:
+            merged_results.append({
+                "table_id": t["table_id"],
+                "merged_table_html": t["merged_table_html"],
+                "group_table_ids": t.get("group_table_ids", []),
+            })
+
+    return JSONResponse(content={"status": "ok", "applied": len(body.confirmed), "merged": merged_results})
 
 
 @app.get("/api/sessions")
@@ -531,6 +1337,32 @@ async def get_document_html(
         raise HTTPException(status_code=404, detail=f"HTML content not available for '{name}'")
     html_content = Path(html_path).read_text(encoding="utf-8")
     return HTMLResponse(content=html_content)
+
+
+@app.get("/api/documents/page-html")
+async def get_page_html(
+    name: str,
+    page: int = 1,
+    x_session_id: Optional[str] = Header(None),
+) -> HTMLResponse:
+    session = _get_session(x_session_id)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
+
+    pdf_info = session["pdfs"][name]
+    html_path = pdf_info.get("html_path")
+    if not html_path or not Path(html_path).exists():
+        raise HTTPException(status_code=404, detail="HTML content not available")
+
+    from pdftablesearch.translation import split_html_by_pages
+    html_content = Path(html_path).read_text(encoding="utf-8")
+    pages = split_html_by_pages(html_content)
+
+    for pn, chunk in pages:
+        if pn == page:
+            return HTMLResponse(content=chunk.strip())
+
+    raise HTTPException(status_code=404, detail=f"Page {page} not found")
 
 
 @app.get("/api/documents/images")
@@ -838,6 +1670,8 @@ async def upload_pdfs(
             processor.load_documents(str(dest), use_hybrid=True, output_dir=pdf_output_dir)
             documents = processor.get_documents()
 
+            standard_html_path = processor.convert_standard(str(dest), output_dir=pdf_output_dir)
+
             html_path: Optional[str] = None
             md_path: Optional[str] = None
             page_count: int = 0
@@ -860,9 +1694,54 @@ async def upload_pdfs(
             }
             continue
 
-        table_count = len(documents)
+        hybrid_tables = [
+            TableSearchResult.from_langchain_document(doc, 0.0).to_dict()
+            for doc in documents
+        ]
+
+        final_tables = _build_tables_from_pymupdf(
+            str(dest),
+            hybrid_tables,
+            str(standard_html_path) if standard_html_path else None,
+        )
+
+        if not final_tables:
+            final_tables = hybrid_tables
+
+        for table in final_tables:
+            table["table_type"] = _classify_table_type(
+                table.get("table_title"), table.get("table_html")
+            )
+
+        table_count = len(final_tables)
         total_tables += table_count
         all_docs.extend(documents)
+
+        pymupdf_only_count = 0
+        for ft in final_tables:
+            if ft.get("_source") == "pymupdf":
+                from langchain_core.documents import Document as LCDocument
+                ft_title = ft.get("table_title") or ""
+                ft_html = ft.get("table_html") or ""
+                content_parts = []
+                if ft_title:
+                    content_parts.append(ft_title)
+                if ft_html:
+                    content_parts.append(ft_html)
+                content = "\n".join(content_parts)
+                doc_meta = {
+                    "page_number": ft.get("page_number", 0),
+                    "bounding_box": ft.get("bounding_box", [0, 0, 0, 0]),
+                    "table_id": ft.get("table_id", ""),
+                    "document_name": ft.get("document_name", filename),
+                    "table_html": ft_html,
+                }
+                if ft_title:
+                    doc_meta["table_title"] = ft_title
+                all_docs.append(LCDocument(page_content=content, metadata=doc_meta))
+                pymupdf_only_count += 1
+        if pymupdf_only_count:
+            print(f"[index] Added {pymupdf_only_count} PyMuPDF-only tables to ChromaDB for {filename}")
 
         session["pdfs"][filename] = {
             "path": str(dest),
@@ -870,16 +1749,8 @@ async def upload_pdfs(
             "html_path": html_path,
             "md_path": md_path,
             "page_count": page_count,
-            "tables": [
-                TableSearchResult.from_langchain_document(doc, 0.0).to_dict()
-                for doc in documents
-            ],
+            "tables": final_tables,
         }
-
-        for table in session["pdfs"][filename]["tables"]:
-            table["table_type"] = _classify_table_type(
-                table.get("table_title"), table.get("table_html")
-            )
 
         pdf_results[filename] = {
             "table_count": table_count,
@@ -913,12 +1784,23 @@ async def upload_pdfs(
 
     _sessions[session_id] = session
 
+    # Detect multi-page table continuations
+    all_suggestions: list[dict] = []
+
+    for fname, finfo in session["pdfs"].items():
+        tables = finfo.get("tables", [])
+        pairs = _detect_multipage_tables(tables)
+        for pair in pairs:
+            pair["pdf_name"] = fname
+            all_suggestions.append(pair)
+
     return JSONResponse(
         content={
             "session_id": session_id,
             "pdfs": pdf_results,
             "total_tables": total_tables,
             "total_pages": sum(info.get("page_count", 0) for info in session["pdfs"].values()),
+            "table_group_suggestions": all_suggestions,
         }
     )
 
@@ -1193,7 +2075,9 @@ async def qa(
         f"1. Answer based ONLY on the provided table data\n"
         f"2. Use specific numbers from the table when possible\n"
         f"3. If the table doesn't contain enough information, say so clearly\n"
-        f"4. Respond in Korean"
+        f"4. Respond in Korean\n"
+        f"5. Do NOT include HTML tags in your answer. Use plain text or markdown tables only.\n"
+        f"6. When presenting data, use markdown table format (| col1 | col2 |) instead of HTML."
     )
 
     user_prompt = (
@@ -1429,6 +2313,7 @@ async def ask_document(
             "chunk_index": meta.get("chunk_index", 0),
             "page_number": meta.get("page_number", 1),
             "pdf_page_count": meta.get("pdf_page_count", 1),
+            "paragraph_id": meta.get("paragraph_id", ""),
             "text": chunk_text,
         })
 
@@ -1513,6 +2398,100 @@ class TranslateRequest(BaseModel):
     pdf_name: str
     source_lang: str = "ko"
     target_lang: str = "en"
+
+
+@app.post("/api/translate-html")
+async def translate_html_pages(
+    body: TranslateRequest,
+    x_session_id: Optional[str] = Header(None),
+) -> StreamingResponse:
+    session = _get_session(x_session_id)
+    if body.pdf_name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{body.pdf_name}' not found")
+
+    pdf_info = session["pdfs"][body.pdf_name]
+    html_path = pdf_info.get("html_path")
+    if not html_path or not Path(html_path).exists():
+        raise HTTPException(status_code=404, detail="HTML content not available")
+
+    import queue as _queue
+    import threading
+    import tempfile
+
+    from pdftablesearch.translation import translate_html_by_pages
+
+    output_dir = Path(pdf_info.get("upload_dir", tempfile.mkdtemp())) / "translated"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result_queue: _queue.Queue[dict] = _queue.Queue()
+
+    def _on_page_done(page_num: int, total_pages: int, original_html: str, translated_html: str) -> None:
+        result_queue.put({
+            "type": "page_done",
+            "page": page_num,
+            "total_pages": total_pages,
+            "original_html": original_html,
+            "translated_html": translated_html,
+        })
+
+    def _run():
+        try:
+            translate_html_by_pages(
+                html_path=html_path,
+                output_dir=str(output_dir),
+                source_lang=body.source_lang,
+                target_lang=body.target_lang,
+                on_page_done=_on_page_done,
+            )
+            result_queue.put({"type": "done"})
+        except Exception as exc:
+            result_queue.put({"type": "error", "error": str(exc)})
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    def generate():
+        while True:
+            try:
+                data = result_queue.get(timeout=1.0)
+            except _queue.Empty:
+                yield ": heartbeat\n\n"
+                continue
+
+            event_type = data.pop("type")
+            yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            if event_type in ("done", "error"):
+                break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/translated-page")
+async def get_translated_page(
+    name: str,
+    page: int = 1,
+    x_session_id: Optional[str] = Header(None),
+) -> HTMLResponse:
+    session = _get_session(x_session_id)
+    if name not in session["pdfs"]:
+        raise HTTPException(status_code=404, detail=f"PDF '{name}' not found")
+
+    pdf_info = session["pdfs"][name]
+    upload_dir = pdf_info.get("upload_dir", "")
+    translated_file = Path(upload_dir) / "translated" / f"page_{page}.html"
+
+    if not translated_file.exists():
+        raise HTTPException(status_code=404, detail=f"Translated page {page} not found. Run translate first.")
+
+    return HTMLResponse(content=translated_file.read_text(encoding="utf-8"))
 
 
 @app.post("/api/translate")

@@ -41,7 +41,6 @@ from pdftablesearch.loader.markdown_parser import (
     extract_table_info,
 )
 from pdftablesearch.loader.matcher import (
-    calculate_table_similarity,
     find_best_json_match,
 )
 
@@ -187,15 +186,16 @@ class PDFProcessor:
         documents: List[Document] = []
         used_json_indices: set = set()
 
-        for idx, (table_html_str, _offset, html_title) in enumerate(html_tables):
+        for idx, (table_html_str, _offset, html_title, html_context) in enumerate(html_tables):
             table_title: Optional[str] = html_title
-            table_context: Optional[str] = None
+            table_context: Optional[str] = html_context
             page_estimate = 1
 
             if not table_title and idx < len(table_info_list):
                 info = table_info_list[idx]
                 table_title = info.get("title")
-                table_context = info.get("context")
+                if not table_context:
+                    table_context = info.get("context")
                 page_estimate = info.get("page_estimate", 1)
 
             page_number = page_estimate
@@ -212,17 +212,6 @@ class PDFProcessor:
                 json_id = meta.get("id", best_match_idx)
                 table_id = f"table_{page_number}_{json_id}"
                 used_json_indices.add(best_match_idx)
-            else:
-                if all_metadata:
-                    num_json_tables = len(all_metadata)
-                    closest_idx = min(
-                        (i for i in range(num_json_tables) if i not in used_json_indices),
-                        key=lambda x: abs(x - idx),
-                        default=None,
-                    )
-                    if closest_idx is not None:
-                        page_estimate = all_metadata[closest_idx].get("page_number", page_estimate)
-                page_number = page_estimate
 
             table_md = html_table_to_markdown(table_html_str)
 
@@ -239,7 +228,13 @@ class PDFProcessor:
             if table_context:
                 doc_metadata["table_context"] = table_context
 
-            content = f"{table_title}\n{table_html_str}" if table_title else table_html_str
+            content_parts = []
+            if table_title:
+                content_parts.append(table_title)
+            if table_context:
+                content_parts.append(table_context)
+            content_parts.append(table_html_str)
+            content = "\n".join(content_parts)
 
             doc = Document(page_content=content, metadata=doc_metadata)
             documents.append(doc)
@@ -254,6 +249,41 @@ class PDFProcessor:
             tables_extracted=len(documents),
             document_name=document_name,
         )
+
+    def convert_standard(self, pdf_path: str, output_dir: Optional[str] = None) -> Optional[Path]:
+        """Run standard (non-hybrid) PDF conversion and return the HTML file path.
+
+        Returns None if conversion fails or no HTML is produced.
+        The output is written to a ``standard/`` subdirectory next to the hybrid output.
+        """
+        validated_path = Path(pdf_path)
+        if output_dir:
+            target = Path(output_dir) / "standard"
+        else:
+            target = self._get_output_dir(validated_path) / "standard"
+        target.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Standard conversion: %s -> %s", validated_path, target)
+        try:
+            params = {
+                "input_path": str(validated_path),
+                "output_dir": str(target),
+                "format": "html",
+            }
+            try:
+                opendataloader_pdf.convert(**params)
+            except TypeError:
+                params.pop("format", None)
+                opendataloader_pdf.convert(input_path=str(validated_path), output_dir=str(target))
+        except Exception as exc:
+            logger.warning("Standard conversion failed: %s", exc)
+            return None
+
+        html_files = list(target.glob("*.html"))
+        if html_files:
+            logger.info("Standard HTML produced: %s", html_files[0])
+            return html_files[0]
+        return None
 
     def get_documents(self) -> List[Document]:
         """Return the LangChain Documents from the most recent load."""

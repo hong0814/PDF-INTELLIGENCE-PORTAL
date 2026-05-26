@@ -15,11 +15,12 @@ from bs4 import BeautifulSoup
 
 def extract_html_tables_from_file(
     html_path: "Path",
-) -> List[Tuple[str, int, Optional[str]]]:
+) -> List[Tuple[str, int, Optional[str], Optional[str]]]:
     """Extract all ``<table>`` elements from an HTML file.
 
-    Returns list of (table_html, index, title) tuples.  The title is the
-    text of the nearest h1-h6 tag preceding the table.
+    Returns list of (table_html, index, title, context) tuples.
+    The title is the text of the nearest h1-h6 tag preceding the table.
+    The context is surrounding text from sibling elements before the table.
     """
     from pathlib import Path
 
@@ -35,7 +36,7 @@ def extract_html_tables_from_file(
     soup = BeautifulSoup(content, "html.parser")
     tables = soup.find_all("table")
 
-    result: List[Tuple[str, int, Optional[str]]] = []
+    result: List[Tuple[str, int, Optional[str], Optional[str]]] = []
     for idx, table_tag in enumerate(tables):
         title: Optional[str] = None
         prev_sibling = table_tag.find_previous_sibling(
@@ -46,8 +47,43 @@ def extract_html_tables_from_file(
             title = re.sub(r"^[\d\w가나다라마바사아자차카타파하]+\.\s+", "", title)
             title = title.strip()
 
+        context_parts: List[str] = []
+        for sib in table_tag.previous_siblings:
+            if hasattr(sib, "get_text"):
+                text = sib.get_text(separator=" ", strip=True)
+            elif isinstance(sib, str) and sib.strip():
+                text = sib.strip()
+            else:
+                continue
+            if text:
+                context_parts.append(text)
+            if len(context_parts) >= 5:
+                break
+        context_parts.reverse()
+        after_parts: List[str] = []
+        for sib in table_tag.next_siblings:
+            if hasattr(sib, "get_text"):
+                text = sib.get_text(separator=" ", strip=True)
+            elif isinstance(sib, str) and sib.strip():
+                text = sib.strip()
+            else:
+                continue
+            if text:
+                after_parts.append(text)
+            if len(after_parts) >= 2:
+                break
+
+        before_text = " ".join(context_parts)[:500]
+        after_text = " ".join(after_parts)[:200]
+        context = ""
+        if before_text:
+            context += before_text
+        if after_text:
+            context += (" " if context else "") + after_text
+        context = context.strip() or None
+
         table_html = sanitize_table_html(str(table_tag))
-        result.append((table_html, idx, title))
+        result.append((table_html, idx, title, context))
 
     return result
 
