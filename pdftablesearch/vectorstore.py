@@ -20,6 +20,12 @@ from langchain_community.vectorstores import Chroma
 from pdftablesearch.embeddings import ZaiEmbeddings
 from pdftablesearch.exceptions import VectorIndexError, VectorSearchError
 from pdftablesearch.utils import get_logger
+from pdftablesearch.encryption import (
+    is_encryption_enabled,
+    is_encrypted_metadata,
+    encrypt_text,
+    decrypt_text,
+)
 
 logger = get_logger(__name__)
 
@@ -159,26 +165,22 @@ class TableVectorStore:
         If the vector store does not yet exist, it is created. Otherwise,
         documents are appended to the existing collection.
 
-        When *skip_existing* is ``True``, documents whose content hash
-        is already in the index are silently skipped, enabling
-        incremental indexing.
+        When encryption is enabled, page_content is encrypted before storage
+        while embeddings are generated from the original plaintext.
 
-        Args:
-            documents: List of LangChain ``Document`` objects with table
-                content and metadata.
-            skip_existing: When ``True``, skip documents already indexed.
+        When *skip_existing* is ``True``, documents whose content hash
+        is already in the index are silently skipped.
 
         Returns:
             List of ChromaDB document IDs for the inserted documents.
-
-        Raises:
-            VectorIndexError: If document insertion fails.
         """
         import shutil
 
         if not documents:
             logger.warning("No documents to add")
             return []
+
+        use_encryption = is_encryption_enabled()
 
         if skip_existing:
             new_docs: List[Document] = []
@@ -197,10 +199,24 @@ class TableVectorStore:
             return []
 
         logger.info(
-            "Adding %d documents to collection '%s'",
+            "Adding %d documents to collection '%s'%s",
             len(documents),
             self.collection_name,
+            " (encrypted)" if use_encryption else "",
         )
+
+        plaintexts = [doc.page_content for doc in documents]
+        metadatas = [dict(doc.metadata) for doc in documents]
+
+        if use_encryption:
+            pre_embeddings = self.embeddings.embed_documents(plaintexts)
+            encrypted_texts = [encrypt_text(pt) for pt in plaintexts]
+            for meta in metadatas:
+                meta["_encrypted"] = True
+            store_texts = encrypted_texts
+        else:
+            pre_embeddings = None
+            store_texts = plaintexts
 
         # Free any prior Chroma connection before creating/appending
         if self._vectorstore is not None:
@@ -224,19 +240,23 @@ class TableVectorStore:
                         embedding_function=self.embeddings,
                         persist_directory=self.persist_dir,
                     )
-                    self._vectorstore.add_documents(documents)
-                    logger.info("Appended %d documents to existing store", len(documents))
                 else:
                     persist_path.mkdir(parents=True, exist_ok=True)
-                    self._vectorstore = Chroma.from_documents(
-                        documents=documents,
-                        embedding=self.embeddings,
-                        persist_directory=self.persist_dir,
+                    self._vectorstore = Chroma(
                         collection_name=self.collection_name,
+                        embedding_function=self.embeddings,
+                        persist_directory=self.persist_dir,
                     )
-                    logger.info(
-                        "Created new vector store with %d documents", len(documents)
-                    )
+
+                self._vectorstore.add_texts(
+                    texts=store_texts,
+                    metadatas=metadatas,
+                    embeddings=pre_embeddings,
+                )
+                logger.info(
+                    "Stored %d documents%s", len(store_texts),
+                    " (pre-embedded + encrypted)" if use_encryption else "",
+                )
 
                 self._persist()
                 return self._vectorstore.get()["ids"]
@@ -330,7 +350,22 @@ class TableVectorStore:
                 query=query, **search_kwargs
             )
 
+            if is_encryption_enabled():
+                results = [
+                    (
+                        Document(
+                            page_content=decrypt_text(doc.page_content),
+                            metadata=doc.metadata,
+                        )
+                        if is_encrypted_metadata(doc.metadata)
+                        else doc,
+                        score,
+                    )
+                    for doc, score in results
+                ]
+
             logger.info("Found %d results", len(results))
+            return results
             return results
 
         except Exception as exc:
