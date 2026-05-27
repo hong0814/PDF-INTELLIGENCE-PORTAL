@@ -115,6 +115,10 @@ export interface UnifiedSource {
   text: string;
   chunk_index?: number;
   table_id?: string;
+  bounding_box?: number[] | null;
+  merged_table_html?: string | null;
+  group_id?: string | null;
+  group_table_ids?: string[] | null;
 }
 
 export interface UnifiedSearchResponse {

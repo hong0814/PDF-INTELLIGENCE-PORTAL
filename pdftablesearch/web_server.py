@@ -33,6 +33,7 @@ from starlette.responses import StreamingResponse
 
 from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
 from pdftablesearch.llm_client import ZaiLLMClient
+from pdftablesearch.pii_masking import mask_pii_in_html, mask_pii_text
 from pdftablesearch.translation import translate_html
 import os
 
@@ -143,12 +144,14 @@ def _serialize_session_brief(session_id: str, session: dict) -> dict:
 
 
 def _serialize_table(result: TableSearchResult) -> dict:
+    raw_html = result.table_html or ""
+    raw_title = result.table_title or ""
     return {
         "table_id": result.table_id,
         "document_name": result.document_name,
         "page_number": result.page_number,
-        "table_title": result.table_title,
-        "table_html": result.table_html,
+        "table_title": mask_pii_text(raw_title) if raw_title else raw_title,
+        "table_html": mask_pii_in_html(raw_html) if raw_html else raw_html,
         "table_markdown": result.table_markdown,
         "relevance_score": result.relevance_score,
         "rerank_score": result.rerank_score,
@@ -177,7 +180,7 @@ def _find_table_html(session: dict, table_id: str) -> str:
             if table.get("table_id") == table_id:
                 html = table.get("table_html", "")
                 if html:
-                    return html
+                    return mask_pii_in_html(html)
     raise HTTPException(status_code=404, detail=f"Table '{table_id}' not found in session")
 
 
@@ -1317,6 +1320,7 @@ async def get_document_text(
     html = Path(html_path).read_text(encoding="utf-8")
     text = re.sub(r'<[^>]+>', '', html)
     text = re.sub(r'\s+', ' ', text).strip()
+    text = mask_pii_text(text)
     output_name = Path(name).stem
     return Response(
         content=text,
@@ -1357,14 +1361,26 @@ async def get_document_tables(
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
     tables = session["pdfs"][name].get("tables", [])
-    return JSONResponse(content={"tables": tables})
+    masked_tables = []
+    for t in tables:
+        mt = dict(t)
+        if mt.get("table_html"):
+            mt["table_html"] = mask_pii_in_html(mt["table_html"])
+        if mt.get("table_title"):
+            mt["table_title"] = mask_pii_text(mt["table_title"])
+        if mt.get("merged_table_html"):
+            mt["merged_table_html"] = mask_pii_in_html(mt["merged_table_html"])
+        masked_tables.append(mt)
+    return JSONResponse(content={"tables": masked_tables})
 
 @app.get("/api/documents/html")
 async def get_document_html(
     name: str,
+    session_id: Optional[str] = None,
     x_session_id: Optional[str] = Header(None),
 ) -> HTMLResponse:
-    session = _get_session(x_session_id)
+    sid = session_id or x_session_id
+    session = _get_session(sid)
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
 
@@ -1381,16 +1397,18 @@ async def get_document_html(
     if not html_path or not Path(html_path).exists():
         raise HTTPException(status_code=404, detail=f"HTML content not available for '{name}'")
     html_content = Path(html_path).read_text(encoding="utf-8")
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(content=mask_pii_in_html(html_content))
 
 
 @app.get("/api/documents/page-html")
 async def get_page_html(
     name: str,
     page: int = 1,
+    session_id: Optional[str] = None,
     x_session_id: Optional[str] = Header(None),
 ) -> HTMLResponse:
-    session = _get_session(x_session_id)
+    sid = session_id or x_session_id
+    session = _get_session(sid)
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
 
@@ -1405,7 +1423,7 @@ async def get_page_html(
 
     for pn, chunk in pages:
         if pn == page:
-            return HTMLResponse(content=chunk.strip())
+            return HTMLResponse(content=mask_pii_in_html(chunk.strip()))
 
     raise HTTPException(status_code=404, detail=f"Page {page} not found")
 
@@ -2371,7 +2389,7 @@ async def ask_document(
         "규칙:\n"
         "1. 문서에 없는 내용은 추측하지 마세요\n"
         "2. 구체적인 수치, 날짜, 업체명 등을 정확히 인용하세요\n"
-        "3. 한국어로 답변하세요\n"
+        "3. 한국어로 존댓말(~습니다, ~합니다, ~세요)을 사용하여 답변하세요\n"
         "4. 충분히 상세하게 답변하세요. 수치가 있다면 구체적인 값을 포함하고, 추이나 변화가 있다면 그 내용도 함께 설명하세요\n"
         "5. 실제 답변에 사용한 출처 번호만 답변 마지막 줄에 '사용출처: 1,3' 형식으로 반드시 표시하세요"
     )
@@ -2719,16 +2737,25 @@ async def unified_search_endpoint(
 
             context_parts = []
             all_sources: list[dict] = []
+            session_pdf_names = list(session.get("pdfs", {}).keys())
 
             for i, idx in enumerate(fused_indices):
                 chunk_text = bm25_chunks[idx]
+                masked_chunk = mask_pii_text(chunk_text)
                 meta = bm25_metadatas[idx] if idx < len(bm25_metadatas) else {}
-                context_parts.append(f"[텍스트출처{i+1}] {chunk_text}")
+                context_parts.append(f"[텍스트출처{i+1}] {masked_chunk}")
+                source_text = mask_pii_text(chunk_text[:500])
+                source_pdf = meta.get("source_pdf", "")
+                if source_pdf and not any(p == source_pdf for p in session_pdf_names):
+                    for pn in session_pdf_names:
+                        if pn.startswith(source_pdf):
+                            source_pdf = pn
+                            break
                 all_sources.append({
                     "type": "text",
-                    "pdf": meta.get("source_pdf", ""),
+                    "pdf": source_pdf,
                     "page_number": meta.get("page_number", 1),
-                    "text": chunk_text[:300],
+                    "text": source_text,
                     "chunk_index": meta.get("chunk_index", 0),
                 })
 
@@ -2736,16 +2763,41 @@ async def unified_search_endpoint(
             top_tables = table_candidates[:3]
             table_context_parts = []
             for i, tbl in enumerate(top_tables):
-                title = tbl.table_title or "(제목 없음)"
-                summary = (tbl.table_html or "")[:300]
-                context_parts.append(f"[표출처{i+1}] 제목: {title}\n{summary}")
+                title = mask_pii_text(tbl.table_title or "(제목 없음)")
+                session_table = None
+                resolved_pdf_name = tbl.document_name
+                for _pn, _pinfo in session.get("pdfs", {}).items():
+                    for st in _pinfo.get("tables", []):
+                        if st.get("table_id") == tbl.table_id:
+                            session_table = st
+                            resolved_pdf_name = _pn
+                            break
+                    if session_table:
+                        break
+                if not any(p == resolved_pdf_name for p in session_pdf_names):
+                    for pn in session_pdf_names:
+                        if pn.startswith(tbl.document_name):
+                            resolved_pdf_name = pn
+                            break
+                merged_html = session_table.get("merged_table_html") if session_table else None
+                group_id = session_table.get("group_id") if session_table else None
+                group_table_ids = session_table.get("group_table_ids") if session_table else None
+                display_html = mask_pii_in_html(merged_html) if merged_html else mask_pii_in_html((tbl.table_html or "")[:300])
+                context_parts.append(f"[표출처{i+1}] 제목: {title}\n{display_html}")
                 table_context_parts.append(tbl)
+                bbox_val = tbl.bounding_box if hasattr(tbl, 'bounding_box') and tbl.bounding_box else None
+                if bbox_val and all(v == 0 for v in bbox_val):
+                    bbox_val = None
                 all_sources.append({
                     "type": "table",
-                    "pdf": tbl.document_name,
+                    "pdf": resolved_pdf_name,
                     "page_number": tbl.page_number,
                     "text": title,
                     "table_id": tbl.table_id,
+                    "bounding_box": bbox_val,
+                    "merged_table_html": mask_pii_in_html(merged_html) if merged_html else None,
+                    "group_id": group_id,
+                    "group_table_ids": group_table_ids,
                 })
 
             context_text = "\n\n---\n\n".join(context_parts)
@@ -2756,7 +2808,7 @@ async def unified_search_endpoint(
                 "규칙:\n"
                 "1. 문서에 없는 내용은 추측하지 마세요\n"
                 "2. 구체적인 수치, 날짜, 업체명 등을 정확히 인용하세요\n"
-                "3. 한국어로 마크다운 형식으로 답변하세요\n"
+                "3. 한국어로 존댓말(~습니다, ~합니다, ~세요)을 사용하여 마크다운 형식으로 답변하세요\n"
                 "4. HTML 태그를 사용하지 마세요\n"
                 "5. 출처 번호를 [텍스트출처N] 또는 [표출처N] 형식으로 본문에 인용하세요\n"
                 "6. 답변 마지막 줄에 '사용출처: 텍스트1,표2' 형식으로 사용한 출처만 표시하세요"
@@ -2800,7 +2852,7 @@ async def unified_search_endpoint(
             for evt in queue:
                 yield evt
 
-            # Parse 사용출처
+            # Parse usage from both 사용출처 line and inline citations
             used_text_indices: list[int] = []
             used_table_indices: list[int] = []
             used_match = re.search(r'사용출처:\s*(.+)', accumulated)
@@ -2816,18 +2868,29 @@ async def unified_search_endpoint(
                         if num_str:
                             used_table_indices.append(int(num_str.group()) - 1)
 
+            for m in re.finditer(r'\[텍스트출처(\d+)\]', accumulated):
+                idx = int(m.group(1)) - 1
+                if idx not in used_text_indices:
+                    used_text_indices.append(idx)
+            for m in re.finditer(r'\[표출처(\d+)\]', accumulated):
+                idx = int(m.group(1)) - 1
+                if idx not in used_table_indices:
+                    used_table_indices.append(idx)
+
             # Filter sources to only used ones (or all if parsing failed)
             if used_text_indices or used_table_indices:
+                text_counter = 0
+                table_counter = 0
                 filtered_sources = []
                 for src in all_sources:
                     if src["type"] == "text":
-                        idx = next((i for i, s in enumerate(all_sources) if s is src), -1)
-                        if idx in used_text_indices:
+                        if text_counter in used_text_indices:
                             filtered_sources.append(src)
+                        text_counter += 1
                     elif src["type"] == "table":
-                        idx = next((i for i, s in enumerate(all_sources) if s is src and s["type"] == "table"), -1)
-                        if idx in used_table_indices:
+                        if table_counter in used_table_indices:
                             filtered_sources.append(src)
+                        table_counter += 1
             else:
                 filtered_sources = all_sources
 
@@ -2835,7 +2898,17 @@ async def unified_search_endpoint(
             referenced_tables = []
             for i, tbl in enumerate(table_context_parts):
                 if not used_table_indices or i in used_table_indices:
-                    referenced_tables.append(_serialize_table(tbl))
+                    serialized = _serialize_table(tbl)
+                    for _pn, _pinfo in session.get("pdfs", {}).items():
+                        for st in _pinfo.get("tables", []):
+                            if st.get("table_id") == tbl.table_id and st.get("merged_table_html"):
+                                serialized["table_html"] = mask_pii_in_html(st["merged_table_html"])
+                                serialized["merged_table_html"] = serialized["table_html"]
+                                break
+                        else:
+                            continue
+                        break
+                    referenced_tables.append(serialized)
 
             result_data = json.dumps({
                 "answer": accumulated,
@@ -2881,7 +2954,7 @@ async def unified_followup_endpoint(
         pdf = src.get("pdf", "")
         page = src.get("page_number", "")
         text = src.get("text", "")
-        source_texts.append(f"[{src_type}출처 - {pdf} p.{page}] {text}")
+        source_texts.append(f"[{src_type}출처 - {pdf} p.{page}] {mask_pii_text(text)}")
 
     context_block = "\n\n".join(source_texts)
 
@@ -2891,7 +2964,7 @@ async def unified_followup_endpoint(
         "규칙:\n"
         "1. 이전 답변과 출처를 기반으로 답변하세요\n"
         "2. 문서에 없는 내용은 추측하지 마세요\n"
-        "3. 한국어로 마크다운 형식으로 답변하세요\n"
+        "3. 한국어로 존댓말(~습니다, ~합니다, ~세요)을 사용하여 마크다운 형식으로 답변하세요\n"
         "4. HTML 태그를 사용하지 마세요"
     )
 

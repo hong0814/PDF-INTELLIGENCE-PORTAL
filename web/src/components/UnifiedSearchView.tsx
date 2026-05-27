@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { useAppStore } from '../store/useAppStore';
+import { drawPIIMasks } from '../utils/piiDetection';
 import * as api from '../api/client';
 import { BASE } from '../api/client';
 import type { ProgressEvent, UnifiedSource, TableResult } from '../types';
@@ -125,80 +126,170 @@ export default function UnifiedSearchView() {
     setSelectedPdfs(next);
   }, [selectedPdfs, setSelectedPdfs]);
 
-  return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary tracking-tight">문서 검색</h1>
-          <p className="text-sm text-text-muted mt-1">표와 텍스트를 통합 검색합니다. AI가 관련 문서를 찾아 답변합니다.</p>
-        </div>
-        {pdfs.length > 0 && (
-          <div className="flex items-center gap-3 text-sm text-text-muted mb-0.5">
-            <span className="flex items-center gap-1">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              {pdfs.length}개 문서
-            </span>
-            <span className="text-border">|</span>
-            <span className="flex items-center gap-1">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 14h18m-9-4v8m-7-4h14M4 6h16" />
-              </svg>
-              {totalTables}개 테이블
-            </span>
-          </div>
-        )}
-      </div>
+  const hasResult = !!unifiedResult || !!error;
 
-      <div className="bg-surface-elevated border border-border rounded-xl p-4 space-y-3">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="검색어를 입력하세요..."
-            className="flex-1 bg-surface border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
-            disabled={isUnifiedSearchLoading}
-          />
-          <button
-            onClick={handleSearch}
-            disabled={isUnifiedSearchLoading || !query.trim()}
-            className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
-          >
-            {isUnifiedSearchLoading ? (
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+  return (
+    <div className="space-y-6">
+      {hasResult ? (
+        <>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-text-primary">검색 결과</h2>
+              {query && (
+                <span className="text-sm text-text-muted bg-surface-elevated border border-border rounded-full px-3 py-0.5 max-w-xs truncate">
+                  {query}
+                </span>
+              )}
+              {pdfs.length > 0 && (
+                <div className="flex items-center gap-2 text-xs text-text-muted">
+                  <span className="bg-surface-elevated border border-border rounded-full px-2 py-0.5">{pdfs.length}개 문서</span>
+                  <span className="bg-surface-elevated border border-border rounded-full px-2 py-0.5">{totalTables}개 테이블</span>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => { clearUnifiedSearch(); setQuery(''); }}
+              className="flex items-center gap-1 text-xs text-text-muted hover:text-danger transition-colors px-2 py-1 rounded hover:bg-danger/10"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              검색 초기화
+            </button>
+          </div>
+
+          <div className="bg-surface-elevated border border-border rounded-xl p-4 space-y-3">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="검색어를 입력하세요..."
+                className="flex-1 bg-surface border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
+                disabled={isUnifiedSearchLoading}
+              />
+              <button
+                onClick={handleSearch}
+                disabled={isUnifiedSearchLoading || !query.trim()}
+                className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
+              >
+                {isUnifiedSearchLoading ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                )}
+                검색
+              </button>
+            </div>
+
+            {pdfs.length > 1 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pdfs.map((pdf) => (
+                  <button
+                    key={pdf.name}
+                    onClick={() => togglePdfFilter(pdf.name)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      selectedPdfs.includes(pdf.name)
+                        ? 'bg-primary/10 text-primary border border-primary/30'
+                        : 'bg-surface text-text-muted border border-border hover:border-primary/30'
+                    }`}
+                  >
+                    {pdf.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="pt-16 pb-8">
+          <div className="text-center mb-8">
+            <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <svg className="w-7 h-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
-            )}
-            검색
-          </button>
-        </div>
-
-        {pdfs.length > 1 && (
-          <div className="flex flex-wrap gap-1.5">
-            {pdfs.map((pdf) => (
-              <button
-                key={pdf.name}
-                onClick={() => togglePdfFilter(pdf.name)}
-                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                  selectedPdfs.includes(pdf.name)
-                    ? 'bg-primary/10 text-primary border border-primary/30'
-                    : 'bg-surface text-text-muted border border-border hover:border-primary/30'
-                }`}
-              >
-                {pdf.name}
-              </button>
-            ))}
+            </div>
+            <h2 className="text-xl font-bold text-text-primary mb-1">문서 검색</h2>
+            <p className="text-sm text-text-muted">표와 텍스트를 통합 검색합니다. AI가 관련 문서를 찾아 답변합니다.</p>
           </div>
-        )}
-      </div>
+
+          <div className="bg-surface-elevated border border-border rounded-xl p-4 space-y-3 max-w-3xl mx-auto">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="검색어를 입력하세요..."
+                className="flex-1 bg-surface border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
+                disabled={isUnifiedSearchLoading}
+              />
+              <button
+                onClick={handleSearch}
+                disabled={isUnifiedSearchLoading || !query.trim()}
+                className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
+              >
+                {isUnifiedSearchLoading ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                )}
+                검색
+              </button>
+            </div>
+
+            {pdfs.length > 1 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pdfs.map((pdf) => (
+                  <button
+                    key={pdf.name}
+                    onClick={() => togglePdfFilter(pdf.name)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      selectedPdfs.includes(pdf.name)
+                        ? 'bg-primary/10 text-primary border border-primary/30'
+                        : 'bg-surface text-text-muted border border-border hover:border-primary/30'
+                    }`}
+                  >
+                    {pdf.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {pdfs.length > 0 && (
+              <div className="flex items-center justify-center gap-3 pt-1">
+                <span className="inline-flex items-center gap-1.5 text-xs text-text-muted bg-surface rounded-full px-3 py-1">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  {pdfs.length}개 문서
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-xs text-text-muted bg-surface rounded-full px-3 py-1">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 14h18m-9-4v8m-7-4h14M4 6h16" />
+                  </svg>
+                  {totalTables}개 테이블
+                </span>
+              </div>
+            )}
+          </div>
+
+          {!isUnifiedSearchLoading && pdfs.length === 0 && (
+            <p className="text-center text-text-muted/60 text-xs mt-6">PDF를 업로드하면 표와 텍스트를 모두 검색할 수 있습니다</p>
+          )}
+        </div>
+      )}
 
       <ProgressBar progress={progress} isVisible={showProgress} />
 
@@ -249,25 +340,6 @@ export default function UnifiedSearchView() {
               질문
             </button>
           </div>
-
-          <div className="flex justify-end">
-            <button
-              onClick={() => { clearUnifiedSearch(); setQuery(''); }}
-              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-            >
-              검색 초기화
-            </button>
-          </div>
-        </div>
-      )}
-
-      {!isUnifiedSearchLoading && !unifiedResult && !error && (
-        <div className="text-center py-16">
-          <svg className="w-16 h-16 mx-auto text-border mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <p className="text-text-muted text-sm">PDF를 업로드하고 검색어를 입력하세요</p>
-          <p className="text-text-muted/60 text-xs mt-1">표와 텍스트를 모두 검색하여 통합 결과를 보여줍니다</p>
         </div>
       )}
 
@@ -483,9 +555,27 @@ function FollowupBubble({
 function SourcePopup({ source, onClose }: { source: UnifiedSource; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionId = useAppStore((s) => s.sessionId);
-  const [activeTab, setActiveTab] = useState<'pdf' | 'text'>('pdf');
+  const isTable = source.type === 'table';
+  const [activeTab, setActiveTab] = useState<'pdf' | 'text' | 'table'>('pdf');
+  const [tableHtml, setTableHtml] = useState<string>(source.merged_table_html || '');
+  const [pdfRendered, setPdfRendered] = useState(false);
 
   useEffect(() => {
+    if (!isTable || !source.table_id) return;
+    if (source.merged_table_html) return;
+    fetch(`${BASE}/documents/tables?name=${encodeURIComponent(source.pdf)}&session_id=${encodeURIComponent(sessionId)}`)
+      .then(r => r.json())
+      .then(data => {
+        const tbl = (data.tables || []).find((t: any) => t.table_id === source.table_id);
+        const html = tbl?.merged_table_html || tbl?.table_html;
+        if (html) setTableHtml(html);
+      })
+      .catch(() => {});
+  }, [isTable, source.table_id, source.pdf, sessionId, source.merged_table_html]);
+
+  useEffect(() => {
+    if (activeTab !== 'pdf') return;
+    if (pdfRendered) return;
     let cancelled = false;
     const render = async () => {
       if (!window.pdfjsLib) {
@@ -513,7 +603,40 @@ function SourcePopup({ source, onClose }: { source: UnifiedSource; onClose: () =
         const ctx = canvas.getContext('2d')!;
         await page.render({ canvasContext: ctx, viewport }).promise;
 
-        if (source.text) {
+        if (source.type === 'table' && source.bounding_box && source.bounding_box.length >= 4) {
+          const bbox = source.bounding_box;
+          const [vx1, vy1] = viewport.convertToViewportPoint(bbox[0], bbox[3]);
+          const [vx2, vy2] = viewport.convertToViewportPoint(bbox[2], bbox[1]);
+          const hx = Math.min(vx1, vx2);
+          const hy = Math.min(vy1, vy2);
+          const hw = Math.abs(vx2 - vx1);
+          const hh = Math.abs(vy2 - vy1);
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.25)';
+          ctx.fillRect(hx, hy, hw, hh);
+          ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(hx, hy, hw, hh);
+        }
+
+        const allSpans: { text: string; x: number; y: number; w: number; h: number }[] = [];
+        try {
+          const tc = await page.getTextContent();
+          for (const item of tc.items as any[]) {
+            if (!item.str || !item.str.trim()) continue;
+            const tx = pdfjs.Util.transform(viewport.transform, item.transform);
+            const fontSize = Math.abs(tx[0]) || Math.abs(tx[3]) || 10;
+            allSpans.push({
+              text: item.str,
+              x: tx[4],
+              y: tx[5] - fontSize,
+              w: (item.width || item.str.length * fontSize * 0.6) * scale,
+              h: fontSize * 1.2,
+            });
+          }
+        } catch (_) {}
+        drawPIIMasks(canvas, allSpans);
+
+        if (source.type === 'text' && source.text) {
           const textContent = await page.getTextContent();
           const items = textContent.items as Array<{ str: string; transform: number[]; width: number; height: number }>;
 
@@ -611,13 +734,14 @@ function SourcePopup({ source, onClose }: { source: UnifiedSource; onClose: () =
             ctx.fillRect(s.x, s.y, s.w, s.h);
           }
         }
+        setPdfRendered(true);
       } catch (e) {
         console.warn('PDF page render failed:', e);
       }
     };
     render();
     return () => { cancelled = true; };
-  }, [source.pdf, source.page_number, source.text, sessionId]);
+  }, [activeTab, source.pdf, source.page_number, source.text, sessionId, pdfRendered]);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center" onClick={onClose}>
@@ -637,22 +761,50 @@ function SourcePopup({ source, onClose }: { source: UnifiedSource; onClose: () =
         </div>
 
         <div className="flex border-b bg-gray-50">
-          {(['pdf', 'text'] as const).map(tab => (
+          {([
+            ...(isTable ? ['table' as const] : []),
+            'pdf' as const,
+            ...(!isTable ? ['text' as const] : []),
+          ]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === tab ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-gray-500 hover:text-gray-700'}`}
             >
-              {tab === 'pdf' ? 'PDF' : '텍스트'}
+              {tab === 'pdf' ? 'PDF' : tab === 'text' ? '텍스트' : '표 내용'}
             </button>
           ))}
         </div>
 
-        <div className="flex-1 overflow-auto bg-gray-100 flex justify-center p-4">
-          <div className={`relative inline-block ${activeTab === 'pdf' ? '' : 'hidden'}`}>
+        <div className="flex-1 overflow-auto bg-gray-100 p-4">
+          {isTable && activeTab === 'table' && (
+            <div className="bg-white rounded-lg shadow-sm overflow-auto">
+              {tableHtml ? (
+              <iframe
+                srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Pretendard,system-ui,sans-serif;padding:12px;margin:0}table{width:100%;border-collapse:collapse;font-size:13px}td,th{border:1px solid #e2e8f0;padding:6px 8px;text-align:left}th{background-color:#dbeafe;font-weight:600}tr:nth-child(even) td{background-color:#f8fafc}</style></head><body>${tableHtml}</body></html>`}
+                className="w-full border-0"
+                sandbox="allow-same-origin"
+                style={{ minHeight: '200px' }}
+                onLoad={(e) => {
+                  const iframe = e.target as HTMLIFrameElement;
+                  iframe.style.height = (iframe.contentDocument?.body?.scrollHeight ?? 200) + 'px';
+                }}
+              />
+              ) : (
+                <div className="flex items-center justify-center py-12 text-sm text-gray-400">
+                  <svg className="w-4 h-4 animate-spin mr-2" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  표 내용 로딩 중...
+                </div>
+              )}
+            </div>
+          )}
+          <div className={`flex justify-center ${activeTab === 'pdf' ? '' : 'hidden'}`}>
             <canvas ref={canvasRef} className="shadow-lg rounded" />
           </div>
-          <pre className={`w-full text-sm leading-relaxed whitespace-pre-wrap text-gray-800 font-sans bg-white p-4 rounded-lg shadow-sm ${activeTab === 'text' ? '' : 'hidden'}`}>
+          <pre className={`text-sm leading-relaxed whitespace-pre-wrap text-gray-800 font-sans bg-white p-4 rounded-lg shadow-sm ${activeTab === 'text' ? '' : 'hidden'}`}>
             {source.text}
           </pre>
         </div>
