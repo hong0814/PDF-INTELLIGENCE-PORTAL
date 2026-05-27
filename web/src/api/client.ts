@@ -279,6 +279,7 @@ export async function startHtmlTranslation(
   sourceLang: string = 'ko',
   targetLang: string = 'en',
   onPageDone: (page: number, totalPages: number, originalHtml: string, translatedHtml: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${BASE}/translate-html`, {
     method: 'POST',
@@ -291,6 +292,7 @@ export async function startHtmlTranslation(
       source_lang: sourceLang,
       target_lang: targetLang,
     }),
+    signal,
   });
 
   if (!res.ok) throw new Error(await res.text());

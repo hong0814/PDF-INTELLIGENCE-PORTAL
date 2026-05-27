@@ -53,6 +53,7 @@ export default function TranslationView() {
   const translatedPages = useAppStore((s) => s.translatedPages);
   const setTranslatedPage = useAppStore((s) => s.setTranslatedPage);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<any>(null);
@@ -145,6 +146,7 @@ export default function TranslationView() {
     if (!selectedPdf || !sessionId) return;
     setIsTranslating(true);
     setTranslationProgress(targetLang === 'en' ? '영어 번역 준비 중...' : '한글 번역 준비 중...');
+    abortRef.current = new AbortController();
 
     try {
       await api.startHtmlTranslation(
@@ -159,15 +161,25 @@ export default function TranslationView() {
             setEnHtml(translated);
           }
         },
+        abortRef.current.signal,
       );
       const count = Object.keys(translatedPages[selectedPdf] || {}).length;
       setTranslationProgress(`번역 완료 (${count}페이지)`);
     } catch (err: any) {
-      setTranslationProgress(`번역 오류: ${err.message}`);
+      if (err.name === 'AbortError') {
+        setTranslationProgress('번역이 중단되었습니다.');
+      } else {
+        setTranslationProgress(`번역 오류: ${err.message}`);
+      }
     } finally {
       setIsTranslating(false);
+      abortRef.current = null;
     }
   }, [selectedPdf, sessionId, currentPage, translatedPages, setTranslatedPage, setTranslationProgress, setIsTranslating]);
+
+  const handleAbortTranslation = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const goToPage = useCallback(async (page: number) => {
     if (page < 1 || page > totalPages) return;
@@ -242,6 +254,18 @@ export default function TranslationView() {
         <div className="flex items-center gap-2">
           {translationProgress && (
             <span className="text-xs text-text-muted max-w-[300px] truncate">{translationProgress}</span>
+          )}
+          {isTranslating && (
+            <button
+              onClick={handleAbortTranslation}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20 transition-colors flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <rect x="6" y="4" width="4" height="16" rx="1" />
+                <rect x="14" y="4" width="4" height="16" rx="1" />
+              </svg>
+              중단
+            </button>
           )}
           <button
             onClick={() => handleTranslate('ko')}
