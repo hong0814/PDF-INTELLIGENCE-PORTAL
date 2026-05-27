@@ -22,9 +22,10 @@ export default function UnifiedSearchView() {
   const updateUnifiedFollowup = useAppStore((s) => s.updateUnifiedFollowup);
   const clearUnifiedSearch = useAppStore((s) => s.clearUnifiedSearch);
   const setSelectedPdfs = useAppStore((s) => s.setSelectedPdfs);
+  const isUnifiedSearchLoading = useAppStore((s) => s.isUnifiedSearchLoading);
+  const setIsUnifiedSearchLoading = useAppStore((s) => s.setIsUnifiedSearchLoading);
 
   const [query, setQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [showProgress, setShowProgress] = useState(false);
@@ -44,7 +45,7 @@ export default function UnifiedSearchView() {
     const trimmed = query.trim();
     if (!trimmed || !sessionId) return;
 
-    setIsLoading(true);
+    setIsUnifiedSearchLoading(true);
     setError(null);
     setShowProgress(true);
     setProgress({ phase: 'search', message: '문서를 검색하고 있습니다...', pct: 10 });
@@ -63,7 +64,7 @@ export default function UnifiedSearchView() {
       setError(err instanceof Error ? err.message : '검색 중 오류가 발생했습니다.');
       setShowProgress(false);
     } finally {
-      setIsLoading(false);
+      setIsUnifiedSearchLoading(false);
     }
   }, [query, sessionId, selectedPdfs, setUnifiedResult]);
 
@@ -159,14 +160,14 @@ export default function UnifiedSearchView() {
             onKeyDown={handleKeyDown}
             placeholder="검색어를 입력하세요..."
             className="flex-1 bg-surface border border-border rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
-            disabled={isLoading}
+            disabled={isUnifiedSearchLoading}
           />
           <button
             onClick={handleSearch}
-            disabled={isLoading || !query.trim()}
+            disabled={isUnifiedSearchLoading || !query.trim()}
             className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
           >
-            {isLoading ? (
+            {isUnifiedSearchLoading ? (
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -260,7 +261,7 @@ export default function UnifiedSearchView() {
         </div>
       )}
 
-      {!isLoading && !unifiedResult && !error && (
+      {!isUnifiedSearchLoading && !unifiedResult && !error && (
         <div className="text-center py-16">
           <svg className="w-16 h-16 mx-auto text-border mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -306,7 +307,7 @@ function AnswerCard({
           </div>
           <span className="text-sm font-semibold text-text-primary">AI 답변</span>
         </div>
-        <div className="markdown-answer text-sm leading-relaxed">
+        <div className="markdown-answer text-sm leading-relaxed max-w-full overflow-x-auto">
           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{cleanAnswer}</ReactMarkdown>
         </div>
       </div>
@@ -526,7 +527,7 @@ function SourcePopup({ source, onClose }: { source: UnifiedSource; onClose: () =
               text: item.str,
               x: tx[4],
               y: tx[5] - fontSize,
-              w: item.width || (item.str.length * fontSize * 0.6),
+              w: (item.width || item.str.length * fontSize * 0.6) * scale,
               h: fontSize * 1.2,
             });
           }

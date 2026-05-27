@@ -25,7 +25,15 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   const collapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const setSession = useAppStore((s) => s.setSession);
+  const restoreFromStorage = useAppStore((s) => s.restoreFromStorage);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const switchSession = useCallback((id: string, name: string) => {
+    localStorage.setItem('pdftablesearch_session_id', id);
+    window.history.replaceState(null, '', `/?session=${id}`);
+    setSession(id, name);
+    restoreFromStorage(id);
+  }, [setSession, restoreFromStorage]);
 
   const refreshCurrentSession = useCallback(() => {
     if (!sessionId) return;
@@ -124,13 +132,15 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
       });
       const data = await res.json();
       if (data.session_id) {
-        localStorage.setItem('pdftablesearch_session_id', data.session_id);
-        window.location.reload();
+        switchSession(data.session_id, data.name || name);
+        api.getSessions().then((d: import('../types').SessionsResponse) => {
+          setSessions(d.sessions ?? []);
+        }).catch(() => {});
       }
     } catch (e) {
       alert('세션 생성 실패');
     }
-  }, []);
+  }, [switchSession]);
 
   return (
     <aside className={`${collapsed ? 'w-[48px] min-w-[48px]' : 'w-[280px] min-w-[280px]'} bg-sidebar text-white flex flex-col h-full overflow-y-auto transition-all duration-200`}>
@@ -297,8 +307,9 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
               {sessions.map((session) => (
                 <li key={session.session_id} className="group relative">
                   <button
-                    className="w-full text-left bg-white/5 hover:bg-white/10 rounded-md px-3 py-2 transition-colors pr-8"
-                    onClick={() => { window.location.href = `/?session=${session.session_id}`; }}
+                    className={`w-full text-left bg-white/5 hover:bg-white/10 rounded-md px-3 py-2 transition-colors pr-8 ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+                    onClick={() => { switchSession(session.session_id, session.name); }}
+                    disabled={isUploading}
                   >
                     <p className="text-sm truncate text-white/90">{session.name}</p>
                     <div className="flex items-center gap-2 mt-1">

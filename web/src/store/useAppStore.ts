@@ -51,6 +51,8 @@ interface AppState {
   translatedPages: Record<string, Record<number, string>>;
   unifiedResult: UnifiedSearchResponse | null;
   unifiedFollowups: UnifiedFollowupMessage[];
+  isUnifiedSearchLoading: boolean;
+  setIsUnifiedSearchLoading: (loading: boolean) => void;
   setTranslationProgress: (msg: string) => void;
   setTranslatedPage: (pdfName: string, page: number, html: string) => void;
   clearTranslationState: (pdfName?: string) => void;
@@ -120,6 +122,7 @@ export const useAppStore = create<AppState>((set) => ({
   translatedPages: {},
   unifiedResult: null,
   unifiedFollowups: [],
+  isUnifiedSearchLoading: false,
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -222,6 +225,7 @@ export const useAppStore = create<AppState>((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
   setIsTranslating: (v) => set({ isTranslating: v }),
+  setIsUnifiedSearchLoading: (v) => set({ isUnifiedSearchLoading: v }),
 
   setUnifiedResult: (result) => {
     const state = useAppStore.getState();

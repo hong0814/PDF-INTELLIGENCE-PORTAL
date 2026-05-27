@@ -55,6 +55,7 @@ export default function TabBar() {
   const tableQAs = useAppStore((s) => s.tableQAs);
   const unifiedFollowups = useAppStore((s) => s.unifiedFollowups);
   const isTranslating = useAppStore((s) => s.isTranslating);
+  const isUnifiedSearchLoading = useAppStore((s) => s.isUnifiedSearchLoading);
   const hasSearchQA = useMemo(() => {
     for (const items of Object.values(tableQAs)) {
       if (items.some(item => !item.answer)) return true;
@@ -70,7 +71,7 @@ export default function TabBar() {
     <nav className="flex items-center border-b border-border bg-surface-elevated px-4">
       {TABS.map((tab) => {
         const isActive = activeTab === tab.id;
-        const showPending = (tab.id === 'search' && (hasSearchQA || hasUnifiedFollowup)) || (tab.id === 'translation' && isTranslating);
+        const showPending = (tab.id === 'search' && (hasSearchQA || hasUnifiedFollowup || isUnifiedSearchLoading)) || (tab.id === 'translation' && isTranslating);
         return (
           <button
             key={tab.id}

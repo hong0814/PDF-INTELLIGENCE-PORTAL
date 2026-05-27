@@ -1,12 +1,13 @@
 # PDF Intelligence Portal
 
-PDF 문서에서 표와 텍스트를 의미적으로 검색하고, AI 기반 질의응답을 통해 문서를 분석하는 웹 애플리케이션입니다.
+PDF 문서에서 표와 텍스트를 통합 검색하고, AI 기반 질의응답을 통해 문서를 분석하는 웹 애플리케이션입니다.
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev/)
 [![LangChain](https://img.shields.io/badge/langchain-0.1.0-green.svg)](https://github.com/langchain-ai/langchain)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-0.4.0-orange.svg)](https://www.trychroma.com/)
+[![Ollama](https://img.shields.io/badge/Ollama-gpt--oss:120b-purple.svg)](https://ollama.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## 목차
@@ -32,34 +33,43 @@ PDF 문서에서 표와 텍스트를 의미적으로 검색하고, AI 기반 질
 
 | 특징 | 설명 |
 |------|------|
+| **통합 문서 검색** | 표와 텍스트를 동시에 검색하여 하나의 AI 답변으로 종합 |
 | **의미적 검색** | 단순 키워드 매칭이 아닌 문맥을 이해하고 검색 |
+| **출처 팝업** | 답변의 출처를 클릭하면 실제 PDF 페이지를 렌더링하여 해당 텍스트를 하이라이트 |
+| **후속 질문** | 검색 결과에 대해 추가 질문을 통해 심층 분석 가능 |
 | **다중 문서 지원** | 여러 PDF를 동시에 업로드하고 선택적으로 검색 |
-| **PDF 내 하이라이트** | 검색 결과의 출처 페이지에서 매칭된 부분을 시각적으로 강조 |
 | **한국어 완벽 지원** | 한국어 질문과 문서를 완벽하게 처리 |
 | **세션 관리** | 여러 세션을 생성하고 전환하며 독립적인 작업 환경 유지 |
-| **세션 간 기록 유지** | 세션을 전환해도 이전 검색 기록이 그대로 보존 |
 
 ---
 
 ## 주요 기능
 
-### 1. 표 검색 (Table Search)
+### 1. 문서 검색 (Unified Search)
+
+표와 텍스트를 **동시에 검색**하여 AI가 종합적인 답변을 생성합니다. ChromaDB 벡터 검색 + BM25 키워드 검색을 RRF(Rank Reciprocal Fusion)로 결합하여 높은 정확도를 달성합니다.
+
+- **하이브리드 검색**: 벡터 유사도 검색 + BM25 키워드 검색 → RRF Fusion
+- **AI 답변**: LLM이 관련 표와 텍스트를 종합하여 한국어 답변 생성 (SSE 스트리밍)
+- **출처 인용**: `[텍스트출처N]`, `[표출처N]` 마커로 답변 근거를 명확히 표시
+- **출처 팝업**: 출처 클릭 시 실제 PDF 페이지를 렌더링하고 매칭된 텍스트를 하이라이트 (6단계 폴백 매칭)
+- **관련 표**: 답변과 관련된 표를 인라인으로 렌더링, CSV 다운로드 지원
+- **후속 질문**: 이전 검색 컨텍스트를 유지한 채 추가 질문 가능
+
+### 2. 문서 보기 (Document Viewer)
+
+업로드된 PDF를 페이지 단위로 열람할 수 있습니다. pdf.js를 사용한 고화질 렌더링과 함께, 추출된 표의 위치를 오버레이로 표시합니다.
+
+- PyMuPDF + opendataloader-pdf 이중 감지로 높은 표 인식률
+- 동적 페이지 크기 적용 (A4 외 다양한 페이지 크기 지원)
+- Hybrid bbox 우선 사용으로 정확한 표 경계 표시
+- 표 클릭 시 CSV 다운로드
+
+### 3. 표 검색 (Table Search)
 
 PDF 문서에서 추출된 표를 의미적으로 검색합니다. ChromaDB 벡터 데이터베이스와 로컬 임베딩 모델을 사용하여 관련성 높은 표를 찾아줍니다.
 
 **Smart Search 모드**: 검색된 여러 표 중 AI(LLM)가 가장 관련성 높은 표 하나를 자동으로 선택해 보여줍니다.
-
-### 2. 텍스트 검색 (Document QA)
-
-문서 전체 내용을 기반으로 자연어 질문에 답변합니다. 검색된 문서 청크를 RAG(Retrieval-Augmented Generation) 방식으로 LLM에게 전달하여 정확한 답변을 생성합니다.
-
-- 벡터 검색 + BM25 키워드 검색의 하이브리드 검색 (RRF Fusion)
-- 답변에 사용된 출처 페이지 링크 제공
-- 출처 페이지에서 매칭된 텍스트 하이라이트 표시
-
-### 3. 문서 보기 (Document Viewer)
-
-업로드된 PDF를 페이지 단위로 열람할 수 있습니다. pdf.js를 사용한 고화질 렌더링과 함께, 추출된 표의 위치를 오버레이로 표시합니다. 검색 결과에서 특정 표를 클릭하면 해당 페이지로 이동하여 bounding box 영역이 하이라이트됩니다.
 
 ### 4. 기업금융심사 (Credit Review)
 
@@ -68,7 +78,7 @@ PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스�
 ### 5. 세션 관리
 
 - **세션 생성/전환/삭제**: 여러 독립적인 작업 환경을 관리
-- **검색 기록 유지**: 세션을 전환해도 각 세션의 표 검색 결과와 QA 대화 기록이 localStorage에 보존
+- **검색 기록 유지**: 세션을 전환해도 각 세션의 검색 결과와 대화 기록이 localStorage에 보존
 - **PDF 선택 필터링**: 여러 PDF 중 원하는 문서만 선택하여 검색 범위 제한
 
 ---
@@ -86,25 +96,29 @@ PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스�
 │                    React Frontend (Vite + TypeScript)            │
 │                                                                  │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
-│  │ Main     │ │ Document │ │ Search   │ │ QA Panel │           │
-│  │ Screen   │ │ Viewer   │ │ Results  │ │(Text)    │           │
+│  │ Main     │ │ Document │ │ Unified  │ │ Credit   │           │
+│  │ Screen   │ │ Viewer   │ │ Search   │ │ Review   │           │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
 │                                                                  │
 │  State Management: Zustand (useAppStore)                        │
 │  Styling: Tailwind CSS v4                                       │
+│  Markdown: react-markdown + remark-gfm + rehype-raw             │
+│  PDF Rendering: pdf.js 4.0 (CDN)                                │
 └──────────────────────────────────────────────────────────────────┘
                                 │ HTTP/SSE
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                  FastAPI Backend (Python 3.11)                   │
 │                                                                  │
-│  POST /api/upload          - PDF 업로드 & 테이블 추출            │
-│  POST /api/search          - 표 검색 (벡터 유사도)               │
-│  POST /api/smart-search    - AI 표 선택 검색 (SSE 스트리밍)      │
-│  POST /api/ask-document    - 문서 QA (RAG + LLM, SSE 스트리밍)   │
-│  POST /api/qa              - 표 Q&A (SSE 스트리밍)               │
+│  POST /api/upload            - PDF 업로드 & 테이블 추출          │
+│  POST /api/search            - 표 검색 (벡터 유사도)             │
+│  POST /api/smart-search      - AI 표 선택 검색 (SSE)            │
+│  POST /api/unified-search    - 통합 문서 검색 (SSE)              │
+│  POST /api/unified-followup  - 후속 질문 (SSE)                  │
+│  POST /api/ask-document      - 문서 QA (RAG + LLM, SSE)         │
+│  POST /api/qa                - 표 Q&A (SSE)                     │
 │  GET/POST/DELETE /api/sessions - 세션 관리                       │
-│  GET  /api/documents/*     - PDF/HTML/이미지 서빙                 │
+│  GET  /api/documents/*       - PDF/HTML/이미지 서빙              │
 │                                                                  │
 │  Session Storage: In-Memory Dict (tempfile 기반)                │
 └──────────────────────────────────────────────────────────────────┘
@@ -115,17 +129,17 @@ PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스�
 │ opendataloader-pdf│ │ SentenceTransformers│ │  ChromaDB         │
 │ (PDF → HTML/JSON) │ │ (로컬 임베딩)       │ │ (벡터 저장소)     │
 │                   │ │ BAAI/bge-m3        │ │                   │
-│ Hybrid Mode:      │ │                    │ │ Table Store       │
-│ docling-fast       │ │                    │ │ Doc Chunk Store   │
+│ Hybrid Mode:      │ │                    │ │ pdf_tables        │
+│ docling-fast       │ │                    │ │ doc_chunks        │
 │ (OCR 기반)        │ │                    │ │                   │
 └───────────────────┘ └───────────────────┘ └───────────────────┘
-            │                                       │
-            ▼                                       ▼
-┌───────────────────┐                   ┌───────────────────┐
-│   z.ai LLM API    │                   │   BM25 Index       │
-│   glm-4.7         │                   │   (키워드 검색)    │
-│   (LLM 응답 생성) │                   └───────────────────┘
-└───────────────────┘
+            │                    │                    │
+            ▼                    ▼                    ▼
+┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
+│  PyMuPDF (fitz)   │ │  Ollama Cloud     │ │   BM25 Index       │
+│  표 감지 + bbox    │ │  gpt-oss:120b     │ │   (키워드 검색)    │
+│  동적 페이지 크기   │ │  (LLM 응답 생성)  │ │                   │
+└───────────────────┘ └───────────────────┘ └───────────────────┘
 ```
 
 ### 데이터 처리 파이프라인
@@ -136,9 +150,13 @@ PDF 업로드
   → HTML 파일 생성 (페이지 구분자 포함)
   → HTML에서 <table> 태그 추출 (BeautifulSoup)
   → JSON 메타데이터 매칭 (페이지 번호, bounding box)
+  → PyMuPDF 표 감지 (find_tables) + hybrid 표 매칭
+    → PyMuPDF가 감지한 표 → hybrid HTML 매칭 → bbox는 hybrid 우선 사용
+    → PyMuPDF가 놓친 페이지 → hybrid 표를 fallback으로 복구
+  → 다중페이지 표 연결 감지 (chain detection)
   → LangChain Document 생성 (table_html + metadata)
   → SentenceTransformer 임베딩 (bge-m3, 로컬 CPU)
-  → ChromaDB 저장 (벡터 인덱스)
+  → ChromaDB 저장 (pdf_tables + doc_chunks 컬렉션)
 
 문서 청킹 (텍스트 검색용)
   → HTML에서 표 제거 + 페이지 구분자로 분할
@@ -149,19 +167,23 @@ PDF 업로드
 
 ### 검색 플로우
 
+#### 통합 문서 검색 (Unified Search)
+```
+쿼리 → ChromaDB pdf_tables 검색 (k=10)     ─┐
+     → ChromaDB doc_chunks 검색 (k=10)      ─┤
+     → BM25 키워드 검색 (k=10)              ─┤
+                                                ├→ RRF Fusion
+     ← 상위 표/텍스트 결과 병합             ─┤
+                                                │
+     → LLM에 컨텍스트 전달 (gpt-oss:120b)   ─┘
+     → SSE 스트리밍으로 AI 답변 생성
+     → 출처 정보 + 관련 표 + 원본 텍스트 반환
+```
+
 #### 표 검색
 ```
 쿼리 → SentenceTransformer 임베딩 → ChromaDB similarity search → 결과 반환
 (선택: Smart Search → 상위 20개 후보 → LLM이 최적 표 1개 선택)
-```
-
-#### 텍스트 검색 (Document QA)
-```
-쿼리 → SentenceTransformer 임베딩 → ChromaDB 검색 (k=8)
-     → BM25 키워드 검색 (k=8)
-     → RRF Fusion (Reciprocal Rank Fusion)
-     → 상위 5개 청크 → LLM에 컨텍스트로 전달
-     → SSE 스트리밍으로 답변 생성 + 출처 페이지 반환
 ```
 
 ---
@@ -172,27 +194,29 @@ PDF 업로드
 
 | 탭 | 설명 |
 |---|---|
-| **메인** | PDF 업로드, 전체 문서 현황 대시보드 |
-| **문서 보기** | PDF 페이지 뷰어 + 테이블 오버레이 + 하이라이트 |
-| **표 검색** | 표 의미 검색 + Smart Search + 표별 Q&A |
-| **텍스트 검색** | 문서 전체 기반 자연어 QA + 출처 하이라이트 |
+| **메인** | PDF 업로드, 전체 문서 현황 대시보드 (문서 보기 / 문서 검색 카드) |
+| **문서 보기** | PDF 페이지 뷰어 + 테이블 오버레이 + 하이라이트 + CSV 다운로드 |
+| **문서 검색** | 표+텍스트 통합 검색 + AI 답변 + 출처 팝업 + 후속 질문 |
 | **기업금융심사** | 문서 내 이미지/차트 분석 뷰 |
 
 ### UI 레이아웃
 
 ```
 ┌──────────┬───────────────────────────────────────────────────┐
-│          │  [탭 바: 메인 | 문서보기 | 표검색 | 텍스트검색 | 심사] │
+│          │  [탭 바: 메인 | 문서보기 | 문서검색 | 심사]        │
 │          ├───────────────────────────────────────────────────┤
 │ 사이드바 │                                                   │
-│          │                                                   │
-│ • 세션명  │              메인 콘텐츠 영역                      │
-│ • PDF목록 │                                                   │
-│ • 업로드  │                                                   │
-│ • 세션관리 │                                                   │
-│          │                                                   │
-│ • 초기화  │                                                   │
-│          │                                                   │
+│          │  ┌─ 문서 검색 탭 ──────────────────────────────┐  │
+│ • 세션명  │  │ 🔍 검색바 (PDF 필터 칩)                      │  │
+│ • PDF목록 │  │                                              │  │
+│ • 업로드  │  │ 📋 AI 답변 카드                              │  │
+│ • 세션관리 │  │   • 마크다운 렌더링 (표/볼드/리스트)           │  │
+│          │  │   • [텍스트출처N] [표출처N] 인라인 칩          │  │
+│ • 초기화  │  │   • 관련 표 (펼치기/접기 + CSV 다운로드)      │  │
+│          │  │   • 출처 칩 (클릭 → PDF 팝업)                 │  │
+│          │  │                                              │  │
+│          │  │ 💬 후속 질문 입력바                            │  │
+│          │  └──────────────────────────────────────────────┘  │
 └──────────┴───────────────────────────────────────────────────┘
 ```
 
@@ -205,13 +229,14 @@ PDF 업로드
 - Python 3.11 이상
 - Node.js 18 이상
 - npm 9 이상
+- Ollama API 키 ([ollama.com](https://ollama.com) 가입)
 
 ### 5분 만에 실행하기
 
 ```bash
 # 1. 저장소 클론
-git clone https://github.com/hong0814/pdf-intelligence-portal.git
-cd pdf-intelligence-portal
+git clone https://github.com/hong0814/PDF-INTELLIGENCE-PORTAL.git
+cd PDF-INTELLIGENCE-PORTAL
 
 # 2. Python 가상환경 설정
 python -m venv .venv
@@ -224,7 +249,11 @@ pip install -e .
 opendataloader-pdf-hybrid --port 5002 &
 
 # 5. 환경 변수 설정 (.env 파일)
-echo 'ZAI_API_KEY=your_api_key_here' > .env
+cat > .env << 'EOF'
+OLLAMA_API_KEY=your_ollama_api_key_here
+ZAI_LLM_ENDPOINT=https://ollama.com/v1
+ZAI_LLM_MODEL=gpt-oss:120b
+EOF
 
 # 6. 프론트엔드 빌드
 cd web
@@ -250,8 +279,32 @@ open http://localhost:8000
 `.env` 파일을 프로젝트 루트에 생성:
 
 ```bash
-ZAI_API_KEY=your_z_ai_api_key_here
+# Ollama LLM 설정
+OLLAMA_API_KEY=your_ollama_api_key_here
+ZAI_LLM_ENDPOINT=https://ollama.com/v1
+ZAI_LLM_MODEL=gpt-oss:120b
 ```
+
+> 임베딩은 로컬 `BAAI/bge-m3` 모델을 사용하므로 별도 API 키가 필요하지 않습니다.
+
+#### LLM 모델 변경
+
+Ollama 클라우드에서 제공하는 다양한 모델을 사용할 수 있습니다:
+
+```bash
+# 사용 가능한 모델 목록 확인
+curl -s https://ollama.com/api/tags \
+  -H "Authorization: Bearer $OLLAMA_API_KEY" | python3 -m json.tool
+```
+
+| 모델 | 크기 | 특징 |
+|------|------|------|
+| `gpt-oss:120b` | 65GB | 기본 모델, 사고( reasoning) 지원 |
+| `gemma4:31b` | 62GB | Google Gemma 4, 빠른 응답 |
+| `qwen3.5:397b` | 397GB | 최대급, 최고 품질 |
+| `deepseek-v4-flash` | 140GB | 빠른 추론 |
+
+모델 변경 시 `.env`에서 `ZAI_LLM_MODEL` 값을 수정하세요.
 
 #### 하이브리드 변환 서버
 
@@ -320,7 +373,7 @@ cd web && npm run dev
 pdftablesearch/
 ├── pdftablesearch/          # Python 백엔드 패키지
 │   ├── __init__.py          # 패키지 초기화, 퍼블릭 API
-│   ├── web_server.py        # FastAPI 웹 서버 (세션 관리, API 라우트)
+│   ├── web_server.py        # FastAPI 웹 서버 (API 라우트, 통합 검색)
 │   ├── core.py              # 코어 검색 로직
 │   ├── search.py            # 검색 인터페이스
 │   ├── smart_search.py      # Smart Search (LLM 표 선택)
@@ -328,12 +381,12 @@ pdftablesearch/
 │   ├── vectorstore.py       # ChromaDB 벡터 저장소 래퍼
 │   ├── embedding_provider.py # 임베딩 제공자 인터페이스
 │   ├── local_embeddings.py  # 로컬 SentenceTransformer 임베딩
-│   ├── embeddings.py        # z.ai API 임베딩
-│   ├── llm_client.py        # z.ai LLM 클라이언트
-│   ├── hybrid_search.py     # 하이브리드 검색
+│   ├── embeddings.py        # API 임베딩 (fallback)
+│   ├── llm_client.py        # Ollama LLM 클라이언트 (ChatOpenAI 호환)
+│   ├── hybrid_search.py     # 하이브리드 검색 (벡터 + BM25 + RRF)
 │   ├── reranker.py          # LLM 리랭킹
 │   ├── translation.py       # 문서 번역
-│   ├── config.py            # 설정 관리
+│   ├── config.py            # 설정 관리 (Ollama API 키, 모델)
 │   ├── models.py            # 데이터 모델
 │   ├── exceptions.py        # 커스텀 예외
 │   ├── utils.py             # 유틸리티
@@ -349,35 +402,30 @@ pdftablesearch/
 │   │   ├── App.tsx          # 메인 앱 컴포넌트
 │   │   ├── main.tsx         # 진입점
 │   │   ├── api/
-│   │   │   └── client.ts    # API 클라이언트 함수
+│   │   │   └── client.ts    # API 클라이언트 (SSE 스트리밍 포함)
 │   │   ├── store/
 │   │   │   └── useAppStore.ts # Zustand 상태 관리
 │   │   ├── types/
 │   │   │   └── index.ts     # TypeScript 타입 정의
 │   │   └── components/
-│   │       ├── SearchBar.tsx       # 검색 입력창 (PDF 선택 필터)
-│   │       ├── SearchResults.tsx   # 표 검색 결과 목록
-│   │       ├── TableCard.tsx       # 개별 표 카드 (Q&A 포함)
-│   │       ├── QAPanel.tsx         # 텍스트 검색 (문서 QA)
-│   │       ├── ChatBubble.tsx      # QA 메시지 버블 + 출처 하이라이트
-│   │       ├── DocumentViewer.tsx  # PDF 페이지 뷰어 (pdf.js)
-│   │       ├── CreditReviewView.tsx # 기업금융심사 (이미지 분석)
-│   │       ├── Sidebar.tsx         # 사이드바 (PDF 목록, 업로드)
-│   │       ├── TabBar.tsx          # 탭 네비게이션
-│   │       ├── SessionHeader.tsx   # 세션 헤더
-│   │       ├── MainScreen.tsx      # 메인 대시보드
-│   │       └── ProgressBar.tsx     # 진행 상태 표시
+│   │       ├── UnifiedSearchView.tsx # 통합 문서 검색 (AI 답변 + 출처 팝업)
+│   │       ├── DocumentViewer.tsx    # PDF 페이지 뷰어 (pdf.js + 표 오버레이)
+│   │       ├── SearchBar.tsx         # 검색 입력창 (PDF 선택 필터)
+│   │       ├── SearchResults.tsx     # 표 검색 결과 목록
+│   │       ├── TableCard.tsx         # 개별 표 카드 (Q&A, CSV/HTML 다운로드)
+│   │       ├── ChatBubble.tsx        # QA 메시지 버블 + 출처 하이라이트
+│   │       ├── CreditReviewView.tsx  # 기업금융심사 (이미지 분석)
+│   │       ├── Sidebar.tsx           # 사이드바 (PDF 목록, 업로드)
+│   │       ├── TabBar.tsx            # 탭 네비게이션
+│   │       ├── MainScreen.tsx        # 메인 대시보드
+│   │       └── ProgressBar.tsx       # 진행 상태 표시
 │   ├── vite.config.ts       # Vite 설정 (프록시 등)
-│   ├── package.json         # npm 의존성
-│   └── tailwind.config.js   # Tailwind CSS 설정
+│   └── package.json         # npm 의존성
 │
 ├── tests/                   # Python 테스트
 ├── docs/                    # 문서
-├── examples/                # 사용 예제
 ├── pyproject.toml           # Python 프로젝트 설정
-├── .env.example             # 환경 변수 예제
-├── requirements-web.txt     # 웹 의존성
-└── run_web_demo.sh          # Streamlit 데모 실행 스크립트 (deprecated)
+└── .env                     # 환경 변수 (gitignore)
 ```
 
 ---
@@ -390,20 +438,18 @@ pdftablesearch/
 | | Vite | 8.x |
 | | Tailwind CSS | 4.x |
 | | Zustand (상태 관리) | 5.x |
-| | react-markdown + remark-gfm | 10.x / 4.x |
+| | react-markdown + remark-gfm + rehype-raw | 10.x / 4.x / 7.x |
 | | pdf.js (CDN) | 4.0 |
 | **백엔드** | FastAPI | 0.100+ |
 | | Uvicorn (ASGI) | 0.20+ |
+| | LangChain | 0.1+ |
 | **PDF 처리** | opendataloader-pdf (hybrid) | 2.2+ |
-| | docling-fast (OCR) | - |
 | | PyMuPDF (fitz) | 1.24+ |
 | | BeautifulSoup4 | 4.12+ |
 | **임베딩** | SentenceTransformers (bge-m3) | 2.0+ |
-| | z.ai Embedding API | embedding-3 |
 | **벡터 DB** | ChromaDB | 0.4+ |
-| **LLM** | z.ai API (ChatOpenAI 호환) | glm-4.7 |
+| **LLM** | Ollama Cloud (gpt-oss:120b) | - |
 | **검색** | BM25Okapi (rank-bm25) | 0.2+ |
-| | LangChain | 0.1+ |
 | **데이터** | Pandas | 2.0+ |
 
 ---
@@ -420,14 +466,26 @@ curl http://localhost:5002/health
 opendataloader-pdf-hybrid --port 5002 &
 ```
 
-하이브리드 서버가 없으면 표준 변환 모드로 자동 폴백됩니다. 표 인식률이 떨어질 수 있으니 가능하면 실행하세요.
+하이브리드 서버가 없으면 표준 변환 모드로 자동 폴백됩니다。표 인식률이 떨어질 수 있으니 가능하면 실행하세요。
 
-### 문제: z.ai API 429 Rate Limit
+### 문제: Ollama API 오류
 
-`glm-4.7` 모델 사용 시에도 z.ai 서버 과부하로 429 에러가 발생할 수 있습니다.
+```bash
+# API 연결 테스트
+curl https://ollama.com/v1/chat/completions \
+  -H "Authorization: Bearer $OLLAMA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-oss:120b","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
+```
 
-- 잠시 기다렸다가 재시도 (서버에서 자동으로 최대 5회, 15초~75초 간격으로 재시도)
-- `.env`에서 `ZAI_API_KEY`가 올바른지 확인
+- `.env`에서 `OLLAMA_API_KEY`가 올바른지 확인
+- `ZAI_LLM_MODEL`이 Ollama에서 지원하는 모델명인지 확인
+
+### 문제: 특정 페이지에서 표가 감지되지 않음
+
+PyMuPDF의 `find_tables()`가 표를 감지하지 못하는 경우가 있습니다 (셀 병합, 테두리 없는 표 등). 이 경우 hybrid 파이프라인(opendataloader-pdf)에서 감지한 표가 자동으로 fallback으로 포함됩니다.
+
+서버 로그에서 `[build] fallback` 메시지로 확인할 수 있습니다.
 
 ### 문제: PDF 업로드 실패 (ChromaDB readonly)
 
@@ -438,10 +496,10 @@ upload 중 "attempt to write a readonly database" 에러가 발생하면:
 
 ### 문제: 페이지 번호와 내용 불일치
 
-문서 청킹이 페이지 구분자(`<div class='page-sep' data-pn='N'>`)를 기준으로 수행되므로, 출처 페이지 번호는 실제 페이지와 일치해야 합니다. 불일치가 발생하면 문서를 다시 업로드하세요.
+문서 청킹이 페이지 구분자(`<div class='page-sep' data-pn='N'>`)를 기준으로 수행되므로, 출처 페이지 번호는 실제 페이지와 일치해야 합니다. 불일치가 발생하면 문서를 다시 업로드하세요。
 
 ---
 
 ## 라이선스
 
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 확인하세요.
+이 프로젝트는 MIT 라이선스 하에 배포됩니다。자세한 내용은 [LICENSE](LICENSE) 파일을 확인하세요。

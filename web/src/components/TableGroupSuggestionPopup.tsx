@@ -21,6 +21,11 @@ function mergeChainHtml(tableHtmls: string[]): string | null {
     baseTable.appendChild(tbody);
   }
 
+  const firstHeaderRow = baseTable.querySelector('tr');
+  const firstHeaderTexts = firstHeaderRow
+    ? Array.from(firstHeaderRow.querySelectorAll('th, td')).map(c => c.textContent?.trim() ?? '')
+    : [];
+
   for (let i = 1; i < tableHtmls.length; i++) {
     if (!tableHtmls[i]) continue;
     const docNext = parser.parseFromString(tableHtmls[i], 'text/html');
@@ -30,8 +35,8 @@ function mergeChainHtml(tableHtmls: string[]): string | null {
     const rows = Array.from(nextTable.querySelectorAll('tr'));
     for (const row of rows) {
       const cells = Array.from(row.querySelectorAll('th, td'));
-      const isHeader = cells.length > 0 && cells.every(c => c.tagName === 'TH' && c.textContent?.trim());
-      if (isHeader) continue;
+      const rowTexts = cells.map(c => c.textContent?.trim() ?? '');
+      if (rowTexts.length > 0 && rowTexts.join(',') === firstHeaderTexts.join(',')) continue;
       tbody.appendChild(docFirst.adoptNode(row.cloneNode(true)));
     }
   }

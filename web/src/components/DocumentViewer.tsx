@@ -392,7 +392,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
               )}
               <div className="flex-1 overflow-auto p-2">
                 <iframe
-                  srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Pretendard,system-ui,sans-serif;padding:12px;margin:0}table{width:100%;border-collapse:collapse;font-size:13px}td,th{border:1px solid #e2e8f0;padding:6px 8px;text-align:left}th{background-color:#dbeafe;font-weight:600}tr:nth-child(even)td{background-color:#f8fafc}</style></head><body>${activeOverlay.html}</body></html>`}
+                  srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Pretendard,system-ui,sans-serif;padding:12px;margin:0}table{width:100%;border-collapse:collapse;font-size:13px}td,th{border:1px solid #e2e8f0;padding:6px 8px;text-align:left}th{background-color:#dbeafe;font-weight:600}tr:nth-child(even)td{background-color:#f8fafc}</style></head><body>${activeOverlay.merged_html || activeOverlay.html}</body></html>`}
                   className="w-full border-0"
                   sandbox="allow-same-origin"
                   style={{ minHeight: '200px' }}
@@ -406,7 +406,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
                 <button
                   onClick={() => {
                     const parser = new DOMParser();
-                    const d = parser.parseFromString(activeOverlay.html, 'text/html');
+                    const d = parser.parseFromString(activeOverlay.merged_html || activeOverlay.html, 'text/html');
                     const csvRows: string[] = [];
                     d.querySelectorAll('tr').forEach(tr => {
                       const cells: string[] = [];

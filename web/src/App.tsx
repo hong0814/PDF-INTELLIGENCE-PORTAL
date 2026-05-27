@@ -138,28 +138,14 @@ export default function App() {
     }
   }, [sessionId, handleUploadComplete, setUploading, handleCreateSession]);
 
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'main':
-        return pdfs.length === 0 ? (
-          <MainScreen onUpload={handleMainUpload} />
-        ) : (
-          <MainScreen onUpload={handleMainUpload} hasDocuments />
-        );
+  const isDocView = activeTab === 'document';
 
-      case 'document':
-        return <DocumentViewer />;
-
-      case 'search':
-        return <UnifiedSearchView />;
-
-      case 'translation':
-        return <TranslationView />;
-
-      case 'credit':
-        return <CreditReviewView />;
-    }
-  };
+  const tabStyle = (tabId: string): React.CSSProperties => ({
+    display: activeTab === tabId ? 'flex' : 'none',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+  });
 
   if (!sessionId) {
     return (
@@ -196,8 +182,26 @@ export default function App() {
         <TabBar />
         <SessionHeader />
 
-        <main className={`flex-1 overflow-hidden ${activeTab === 'document' ? '' : 'overflow-y-auto p-6'}`}>
-          {renderContent()}
+        <main className="flex-1 overflow-hidden">
+          <div style={tabStyle('main')} className="overflow-y-auto p-6">
+            {pdfs.length === 0 ? (
+              <MainScreen onUpload={handleMainUpload} />
+            ) : (
+              <MainScreen onUpload={handleMainUpload} hasDocuments />
+            )}
+          </div>
+          <div style={{ ...tabStyle('document'), overflow: 'hidden' }}>
+            <DocumentViewer />
+          </div>
+          <div style={tabStyle('search')} className="overflow-hidden">
+            <UnifiedSearchView />
+          </div>
+          <div style={tabStyle('translation')} className="overflow-y-auto p-6">
+            <TranslationView />
+          </div>
+          <div style={tabStyle('credit')} className="overflow-y-auto p-6">
+            <CreditReviewView />
+          </div>
         </main>
       </div>
 

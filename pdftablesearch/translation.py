@@ -10,10 +10,13 @@ from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
 
+from pdftablesearch.config import get_settings
 from pdftablesearch.llm_client import ZaiLLMClient
 from pdftablesearch.utils import get_logger
 
 logger = get_logger(__name__)
+
+_settings = get_settings()
 
 _STYLE_INJECT = """<style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 40px; color: #1a1a1a; line-height: 1.7; }
@@ -60,8 +63,8 @@ _INTER_PAGE_DELAY = 3
 
 _BATCH_SIZE = 10
 
-_TRANSLATION_MODEL = "glm-4.5-air"
 _TRANSLATION_TIMEOUT = 60
+_DEFAULT_MODEL = _settings.zai_llm_model
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +343,7 @@ def translate_html_by_pages(
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
 
-    client = ZaiLLMClient(max_retries=0, model=_TRANSLATION_MODEL, timeout=_TRANSLATION_TIMEOUT)
+    client = ZaiLLMClient(timeout=_TRANSLATION_TIMEOUT)
 
     html_content = Path(html_path).read_text(encoding="utf-8")
     pages = split_html_by_pages(html_content)
@@ -350,7 +353,7 @@ def translate_html_by_pages(
 
     logger.info(
         "Starting translation: %d pages, model=%s, batch_size=%d, delay=%ds",
-        len(pages), _TRANSLATION_MODEL, _BATCH_SIZE, _INTER_PAGE_DELAY,
+        len(pages), _settings.zai_llm_model, _BATCH_SIZE, _INTER_PAGE_DELAY,
     )
 
     # Check if already inside an event loop (e.g., FastAPI's)
@@ -392,7 +395,7 @@ def translate_html(
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
 
-    client = ZaiLLMClient(max_retries=0, model=_TRANSLATION_MODEL, timeout=_TRANSLATION_TIMEOUT)
+    client = ZaiLLMClient(timeout=_TRANSLATION_TIMEOUT)
 
     html_content = Path(html_path).read_text(encoding="utf-8")
     translated = _translate_page(html_content, client, src, tgt)
@@ -466,7 +469,7 @@ def translate_text_chunks(
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
 
-    client = ZaiLLMClient(max_retries=0, model=_TRANSLATION_MODEL, timeout=_TRANSLATION_TIMEOUT)
+    client = ZaiLLMClient(timeout=_TRANSLATION_TIMEOUT)
 
     translated_parts: list[str] = []
     total = len(chunks)

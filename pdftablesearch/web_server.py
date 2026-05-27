@@ -767,8 +767,6 @@ def _build_tables_from_pymupdf(
             fd["is_inner"] = i in inner_indices
             all_fitz.append(fd)
 
-    doc.close()
-
     outer_fitz = [f for f in all_fitz if not f["is_inner"]]
     inner_fitz = [f for f in all_fitz if f["is_inner"]]
 
@@ -791,6 +789,8 @@ def _build_tables_from_pymupdf(
         has_inner = len(o["inner_table_indices"]) > 0
         table_html = ""
         source = "none"
+        hybrid_bbox: list = []
+        hybrid_title = ""
 
         if has_inner and standard_tables:
             best_score = 0.0
@@ -815,8 +815,23 @@ def _build_tables_from_pymupdf(
             best_ht = None
             page_hybrid = hybrid_by_page.get(o["page"], [])
             for ht in page_hybrid:
+                if ht.get("table_id", "") in matched_hybrid_ids:
+                    continue
+                ht_bbox = ht.get("bounding_box", [])
+                if not ht_bbox or ht_bbox == [0, 0, 0, 0]:
+                    continue
                 html_text = _normalize_text(_table_text_content(ht.get("table_html", "")))
-                score = _table_match_score(html_text, o["text"])
+                text_score = _table_match_score(html_text, o["text"])
+                score = text_score
+                ya1, ya2 = o["pdf_bbox"][1], o["pdf_bbox"][3]
+                yb1, yb2 = ht_bbox[1], ht_bbox[3]
+                overlap_start = max(ya1, yb1)
+                overlap_end = min(ya2, yb2)
+                if overlap_start < overlap_end:
+                    y_overlap = (overlap_end - overlap_start) / max(min(ya2 - ya1, yb2 - yb1), 1)
+                    score = text_score * (0.5 + 0.5 * y_overlap)
+                else:
+                    score = text_score * 0.1
                 if score > best_score:
                     best_score = score
                     best_ht = ht
@@ -824,6 +839,7 @@ def _build_tables_from_pymupdf(
                 table_html = best_ht.get("table_html", "")
                 matched_hybrid_ids.add(best_ht.get("table_id", ""))
                 hybrid_bbox = best_ht.get("bounding_box", [])
+                hybrid_title = best_ht.get("table_title", "")
                 source = "hybrid"
                 print(f"[build] outer p{o['page']} fitz[{o['fi']}] → hybrid score={best_score:.2f}")
 
@@ -839,18 +855,19 @@ def _build_tables_from_pymupdf(
                 source = "pymupdf"
                 print(f"[build] outer p{o['page']} fitz[{o['fi']}] → pymupdf fallback")
 
-        title = ""
-        try:
-            title_page = doc[o["page"] - 1]
-            y_top = o["bbox"][1]
-            clip = fitz.Rect(0, max(0, y_top - 50), title_page.rect.width, y_top)
-            text_above = title_page.get_text("text", clip=clip).strip()
-            if text_above and len(text_above) <= 150:
-                last_line = text_above.split("\n")[-1].strip()
-                if last_line and len(last_line) <= 80:
-                    title = last_line
-        except Exception:
-            pass
+        title = hybrid_title or ""
+        if not title:
+            try:
+                title_page = doc[o["page"] - 1]
+                y_top = o["bbox"][1]
+                clip = fitz.Rect(0, max(0, y_top - 50), title_page.rect.width, y_top)
+                text_above = title_page.get_text("text", clip=clip).strip()
+                if text_above and len(text_above) <= 150:
+                    last_line = text_above.split("\n")[-1].strip()
+                    if last_line and len(last_line) <= 80:
+                        title = last_line
+            except Exception:
+                pass
 
         inner_ids = []
         for inner_idx in o.get("inner_table_indices", []):
@@ -873,6 +890,8 @@ def _build_tables_from_pymupdf(
             "inner_table_ids": inner_ids,
             "_source": source,
         })
+
+    doc.close()
 
     for pn, page_tables in hybrid_by_page.items():
         for ht in page_tables:
@@ -900,51 +919,42 @@ def _detect_multipage_tables(
         pn = t.get("page_number", -1)
         by_page.setdefault(pn, []).append(t)
 
-    def _bbox_contains(outer: list, inner: list) -> bool:
-        if len(outer) < 4 or len(inner) < 4:
-            return False
-        return (outer[0] <= inner[0] and outer[1] <= inner[1]
-                and outer[2] >= inner[2] and outer[3] >= inner[3])
-
-    def _is_inner_table(t: dict, page_tables: list[dict]) -> bool:
-        bbox = t.get("bounding_box", [])
-        if len(bbox) < 4:
-            return False
-        for other in page_tables:
-            if other["table_id"] == t["table_id"]:
-                continue
-            other_bbox = other.get("bounding_box", [])
-            if _bbox_contains(other_bbox, bbox):
-                return True
-        return False
-
-    filtered_by_page: dict[int, list[dict]] = {}
-    for pn, page_tables in by_page.items():
-        outer = [t for t in page_tables if not _is_inner_table(t, page_tables)]
-        filtered_by_page[pn] = outer
-        inner_ids = [t["table_id"] for t in page_tables if _is_inner_table(t, page_tables)]
-        if inner_ids:
-            print(f"[multipage] page={pn}: filtered out inner tables: {inner_ids}")
-
-    raw_pairs: list[tuple[str, str, bool]] = []
-    sorted_pages = sorted(filtered_by_page.keys())
+    sorted_pages = sorted(by_page.keys())
 
     for pa in sorted_pages:
-        for t in filtered_by_page[pa]:
+        for t in by_page[pa]:
             print(f"[multipage] table={t.get('table_id')} page={pa} bbox={t.get('bounding_box')}")
+
+    raw_pairs: list[tuple[str, str, bool]] = []
 
     for pi in range(len(sorted_pages) - 1):
         pa, pb = sorted_pages[pi], sorted_pages[pi + 1]
         if pb != pa + 1:
             continue
 
-        tables_a = filtered_by_page.get(pa, [])
-        tables_b = filtered_by_page.get(pb, [])
+        tables_a = by_page.get(pa, [])
+        tables_b = by_page.get(pb, [])
         if not tables_a or not tables_b:
             continue
 
-        last_on_a = min(tables_a, key=lambda t: t.get("bounding_box", [0, 9999])[3])
-        first_on_b = max(tables_b, key=lambda t: t.get("bounding_box", [0, 0, 0, 0])[1])
+        last_on_a = None
+        last_bbox = [0, 9999, 0, 0]
+        for t in tables_a:
+            bbox = t.get("bounding_box", [0, 0, 0, 0])
+            if len(bbox) >= 4 and bbox != [0, 0, 0, 0] and bbox[1] < last_bbox[1]:
+                last_on_a = t
+                last_bbox = bbox
+
+        first_on_b = None
+        first_bbox = [0, 0, 0, 0]
+        for t in tables_b:
+            bbox = t.get("bounding_box", [0, 0, 0, 0])
+            if len(bbox) >= 4 and bbox != [0, 0, 0, 0] and bbox[3] > first_bbox[3]:
+                first_on_b = t
+                first_bbox = bbox
+
+        if not (last_on_a and first_on_b):
+            continue
 
         bbox_a = last_on_a.get("bounding_box", [0, 0, 0, 0])
         bbox_b = first_on_b.get("bounding_box", [0, 0, 0, 0])
@@ -952,10 +962,10 @@ def _detect_multipage_tables(
             continue
 
         a_near_bottom = bbox_a[1] < 200
-        b_near_top = bbox_b[3] > 650
+        b_near_top = bbox_b[3] > 400
 
         if not (a_near_bottom and b_near_top):
-            print(f"[multipage] p{pa}→p{pb}: skipped, last_a bottom={bbox_a[1]:.0f}({'✓' if a_near_bottom else '✗'}), first_b top={bbox_b[3]:.0f}({'✓' if b_near_top else '✗'})")
+            print(f"[multipage] p{pa}→p{pb}: pos check failed, a_bottom={bbox_a[1]:.0f}({'✓' if a_near_bottom else '✗'}), b_top={bbox_b[3]:.0f}({'✓' if b_near_top else '✗'})")
             continue
 
         html_a = last_on_a.get("table_html", "") or last_on_a.get("html", "")
@@ -966,14 +976,16 @@ def _detect_multipage_tables(
         cols_a = _table_col_count(html_a)
         cols_b = _table_col_count(html_b)
         same_cols = cols_a == cols_b and cols_a > 0
+        table_at_very_top = bbox_b[3] > 700
+        force_include = not same_cols and table_at_very_top
+
+        if not same_cols and not force_include:
+            print(f"[multipage] {last_on_a['table_id']}@p{pa}(cols={cols_a}) -> {first_on_b['table_id']}@p{pb}(cols={cols_b}) skipped (different cols)")
+            continue
 
         raw_pairs.append((last_on_a["table_id"], first_on_b["table_id"], same_cols))
-
-        print(
-            f"[multipage] {last_on_a['table_id']}@p{pa}(cols={cols_a})"
-            f" -> {first_on_b['table_id']}@p{pb}(cols={cols_b})"
-            f" same_cols={same_cols}"
-        )
+        tag = "paired" if same_cols else "paired (cols differ, table at very top)"
+        print(f"[multipage] {last_on_a['table_id']}@p{pa}(cols={cols_a}) -> {first_on_b['table_id']}@p{pb}(cols={cols_b}) {tag}")
 
     # Transitive closure: A→B, B→C => chain [A, B, C]
     chains: list[list[str]] = []
@@ -1083,6 +1095,11 @@ def _merge_grouped_tables(tables: list[dict]) -> None:
         if not table_a:
             continue
 
+        first_header_texts: list[str] = []
+        first_row_a = table_a.find("tr")
+        if first_row_a:
+            first_header_texts = [c.get_text(strip=True) for c in first_row_a.find_all(["td", "th"])]
+
         for tb in group_tables[1:]:
             soup_b = BeautifulSoup(tb.get("table_html", ""), "html.parser")
             table_b = soup_b.find("table")
@@ -1090,13 +1107,13 @@ def _merge_grouped_tables(tables: list[dict]) -> None:
                 continue
 
             rows_b = table_b.find_all("tr")
-            cols_a = len(table_a.find("tr").find_all(["td", "th"])) if table_a.find("tr") else 0
+            cols_a = len(first_row_a.find_all(["td", "th"])) if first_row_a else 0
 
             for row in rows_b:
                 cells = row.find_all(["td", "th"])
                 if cols_a > 0 and len(cells) == cols_a:
-                    is_header = all(c.name == "th" for c in cells if c.get_text(strip=True))
-                    if is_header:
+                    row_texts = [c.get_text(strip=True) for c in cells]
+                    if row_texts == first_header_texts:
                         continue
                 table_a.append(row)
 
