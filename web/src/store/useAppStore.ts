@@ -52,6 +52,8 @@ interface AppState {
   unifiedResult: UnifiedSearchResponse | null;
   unifiedFollowups: UnifiedFollowupMessage[];
   isUnifiedSearchLoading: boolean;
+  overlayVersion: number;
+  bumpOverlayVersion: () => void;
   setIsUnifiedSearchLoading: (loading: boolean) => void;
   setTranslationProgress: (msg: string) => void;
   setTranslatedPage: (pdfName: string, page: number, html: string) => void;
@@ -123,6 +125,8 @@ export const useAppStore = create<AppState>((set) => ({
   unifiedResult: null,
   unifiedFollowups: [],
   isUnifiedSearchLoading: false,
+  overlayVersion: 0,
+  bumpOverlayVersion: () => set((s) => ({ overlayVersion: s.overlayVersion + 1 })),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 

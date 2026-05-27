@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAppStore, type HighlightRegion } from '../store/useAppStore';
 import { BASE } from '../api/client';
+import { drawPIIMasks } from '../utils/piiDetection';
 
 declare global { var pdfjsLib: any; }
 
@@ -31,6 +32,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
   const sessionId = useAppStore((s) => s.sessionId);
   const highlightRegion = useAppStore((s) => s.highlightRegion);
   const setHighlightRegion = useAppStore((s) => s.setHighlightRegion);
+  const overlayVersion = useAppStore((s) => s.overlayVersion);
   const [selectedPdf, setSelectedPdf] = useState<string>(pdfs[0]?.name ?? '');
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -67,6 +69,24 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
     canvas.height = viewport.height;
     const ctx = canvas.getContext('2d')!;
     await page.render({ canvasContext: ctx, viewport }).promise;
+
+    try {
+      const textContent = await page.getTextContent();
+      const piiSpans: { text: string; x: number; y: number; w: number; h: number }[] = [];
+      for (const item of textContent.items as any[]) {
+        if (!item.str || !item.str.trim()) continue;
+        const tx = window.pdfjsLib.Util.transform(viewport.transform, item.transform);
+        const fontSize = Math.abs(tx[0]) || Math.abs(tx[3]) || 10;
+        piiSpans.push({
+          text: item.str,
+          x: tx[4],
+          y: tx[5] - fontSize,
+          w: (item.width || item.str.length * fontSize * 0.6) * scale,
+          h: fontSize * 1.2,
+        });
+      }
+      drawPIIMasks(canvas, piiSpans);
+    } catch (_) { /* PII mask failure must not break rendering */ }
 
     const bbox = highlightBbox ?? highlightBboxRef.current;
     if (bbox && bbox.length >= 4) {
@@ -118,7 +138,12 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
     highlightBboxRef.current = null;
     setHighlightRegion(null);
     await renderCurrentPage(pageNum, null);
-  }, [numPages, renderCurrentPage, setHighlightRegion]);
+    const page = await pdfDocRef.current?.getPage(pageNum);
+    if (page) {
+      const viewport = page.getViewport({ scale });
+      await reloadOverlays(viewport);
+    }
+  }, [numPages, renderCurrentPage, setHighlightRegion, scale, reloadOverlays]);
 
   const navigateToHighlightRef = useRef<HighlightRegion | null>(null);
 
@@ -151,6 +176,24 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
       canvas.height = viewport.height;
       await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
 
+      try {
+        const textContent = await page.getTextContent();
+        const piiSpans: { text: string; x: number; y: number; w: number; h: number }[] = [];
+        for (const item of textContent.items as any[]) {
+          if (!item.str || !item.str.trim()) continue;
+          const tx = window.pdfjsLib.Util.transform(viewport.transform, item.transform);
+          const fontSize = Math.abs(tx[0]) || Math.abs(tx[3]) || 10;
+          piiSpans.push({
+            text: item.str,
+            x: tx[4],
+            y: tx[5] - fontSize,
+            w: (item.width || item.str.length * fontSize * 0.6) * scale,
+            h: fontSize * 1.2,
+          });
+        }
+        drawPIIMasks(canvas, piiSpans);
+      } catch (_) {}
+
       if (highlightBboxRef.current) {
         const ctx = canvas.getContext('2d')!;
         const bbox = highlightBboxRef.current;
@@ -175,8 +218,12 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
   }, [sessionId, scale, ensurePdfJs, reloadOverlays]);
 
   useEffect(() => {
+    if (!selectedPdf && pdfs.length > 0) {
+      setSelectedPdf(pdfs[0].name);
+      return;
+    }
     if (selectedPdf) loadPdf(selectedPdf);
-  }, [selectedPdf]);
+  }, [selectedPdf, pdfs, loadPdf]);
 
   useEffect(() => {
     if (pdfDocRef.current && currentPage > 0) {
@@ -187,6 +234,15 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
       });
     }
   }, [scale]);
+
+  useEffect(() => {
+    if (pdfDocRef.current && currentPage > 0 && overlayVersion > 0) {
+      pdfDocRef.current.getPage(currentPage).then((page: any) => {
+        const viewport = page.getViewport({ scale });
+        reloadOverlays(viewport);
+      });
+    }
+  }, [overlayVersion]);
 
   useEffect(() => {
     if (!highlightRegion || pdfs.length === 0) return;
@@ -316,7 +372,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto relative bg-gray-100 flex justify-center">
+        <div className="flex-1 min-h-0 overflow-auto relative bg-gray-100">
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center z-10">
               <div className="flex items-center gap-2 text-text-muted bg-white/80 px-4 py-2 rounded-lg">
@@ -329,7 +385,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
             </div>
           )}
 
-          <div className="relative">
+          <div className="relative mx-auto" style={{ width: 'fit-content' }}>
             <canvas ref={canvasRef} className="shadow-lg" />
             {currentPageTables.map((overlay) => (
               <div

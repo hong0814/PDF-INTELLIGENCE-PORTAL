@@ -27,6 +27,7 @@ export default function App() {
   const reset = useAppStore((s) => s.reset);
 
   const did404Ref = useRef(false);
+  const prevSessionIdRef = useRef(sessionId);
 
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
 
@@ -48,6 +49,14 @@ export default function App() {
       alert('세션 생성 실패');
     }
   }, [setSession]);
+
+  // Reset did404 flag when sessionId changes (e.g. via sidebar switchSession)
+  useEffect(() => {
+    if (sessionId && sessionId !== prevSessionIdRef.current) {
+      did404Ref.current = false;
+    }
+    prevSessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId || did404Ref.current) return;
@@ -182,7 +191,7 @@ export default function App() {
         <TabBar />
         <SessionHeader />
 
-        <main className="flex-1 overflow-hidden">
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <div style={tabStyle('main')} className="overflow-y-auto p-6">
             {pdfs.length === 0 ? (
               <MainScreen onUpload={handleMainUpload} />
@@ -193,7 +202,7 @@ export default function App() {
           <div style={{ ...tabStyle('document'), overflow: 'hidden' }}>
             <DocumentViewer />
           </div>
-          <div style={tabStyle('search')} className="overflow-hidden">
+          <div style={tabStyle('search')} className="overflow-y-auto p-6">
             <UnifiedSearchView />
           </div>
           <div style={tabStyle('translation')} className="overflow-y-auto p-6">
@@ -208,7 +217,7 @@ export default function App() {
       {tableGroupSuggestions.length > 0 && (
         <TableGroupSuggestionPopup
           suggestions={tableGroupSuggestions}
-          onComplete={() => setTableGroupSuggestions([])}
+          onComplete={() => { setTableGroupSuggestions([]); useAppStore.getState().bumpOverlayVersion(); }}
         />
       )}
     </div>
