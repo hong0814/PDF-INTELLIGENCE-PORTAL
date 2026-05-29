@@ -97,11 +97,10 @@ class PIIMaskResult:
 PATTERNS: tuple[PIIPattern, ...] = (
     PIIPattern("resident_registration_number", re.compile(r"(?<!\d)\d{6}[- ]?[1-4]\d{6}(?!\d)")),
     PIIPattern("foreigner_registration_number", re.compile(r"(?<!\d)\d{6}[- ]?[5-8]\d{6}(?!\d)")),
-    PIIPattern("drivers_license_number", re.compile(r"(?<!\d)\d{2}-\d{2}-\d{6}-\d{2}(?!\d)")),
+    PIIPattern("drivers_license_number", re.compile(r"(?<!\d)\d{3}-\d{2}-\d{5}(?!\d)")),
     PIIPattern("passport_number", re.compile(r"(?<![A-Z0-9])[A-Z]{1,2}\d{7,8}(?![A-Z0-9])")),
     PIIPattern("vin", re.compile(r"(?<![A-HJ-NPR-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-HJ-NPR-Z0-9])")),
-    PIIPattern("vehicle_plate", re.compile(r"(?<!\w)(?:[가-힣]{2}\s?)?\d{2,3}[가-힣]\s?\d{4}(?!\w)")),
-    PIIPattern("credit_card_number", re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")),
+    PIIPattern("credit_card_number", re.compile(r"(?<!\d)\d{4}-\d{4}-\d{4}-\d{4}(?!\d)")),
     PIIPattern("mobile_phone_number", re.compile(r"(?<!\d)01[016789][ -]?\d{2,4}[ -]?\d{3,4}(?!\d)")),
     PIIPattern(
         "landline_phone_number",
