@@ -363,7 +363,7 @@ function AnswerCard({
 }) {
   const [showTables, setShowTables] = useState(true);
   const rawAnswer = answer.replace(/사용출처:.*$/m, '').trim();
-  const cleanAnswer = rawAnswer.replace(/\[(텍스트출처|표출처)\d*\]/g, (match) => {
+  const cleanAnswer = rawAnswer.replace(/[\[【](텍스트출처|표출처)\d*[\]】]/g, (match) => {
     const isTable = match.includes('표출처');
     return `<span class="source-marker ${isTable ? 'source-marker-table' : 'source-marker-text'}">${match}</span>`;
   });
