@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import fitz
 import opendataloader_pdf
 from langchain_core.documents import Document
 
@@ -43,6 +44,7 @@ from pdftablesearch.loader.markdown_parser import (
 from pdftablesearch.loader.matcher import (
     find_best_json_match,
 )
+from pdftablesearch.table_structure_extractor import extract_table_structure
 
 logger = get_logger(__name__)
 
@@ -186,6 +188,12 @@ class PDFProcessor:
         documents: List[Document] = []
         used_json_indices: set = set()
 
+        fitz_doc: Optional[Any] = None
+        try:
+            fitz_doc = fitz.open(str(validated_path))
+        except Exception:
+            logger.warning("Could not open PDF with PyMuPDF for cell-level extraction: %s", validated_path)
+
         for idx, (table_html_str, _offset, html_title, html_context) in enumerate(html_tables):
             table_title: Optional[str] = html_title
             table_context: Optional[str] = html_context
@@ -212,6 +220,8 @@ class PDFProcessor:
                 json_id = meta.get("id", best_match_idx)
                 table_id = f"table_{page_number}_{json_id}"
                 used_json_indices.add(best_match_idx)
+                # docling/opendataloader-pdf bbox is already in PDF coords (bottom-left, y-up)
+                # no conversion needed
 
             table_md = html_table_to_markdown(table_html_str)
 
@@ -228,18 +238,62 @@ class PDFProcessor:
             if table_context:
                 doc_metadata["table_context"] = table_context
 
-            content_parts = []
-            if table_title:
-                content_parts.append(table_title)
-            if table_context:
-                content_parts.append(table_context)
-            content_parts.append(table_html_str)
-            content = "\n".join(content_parts)
+            try:
+                fitz_page = fitz_doc[page_number - 1] if fitz_doc and page_number <= len(fitz_doc) else None
+                structure = extract_table_structure(
+                    html=table_html_str,
+                    table_id=table_id,
+                    table_title=table_title or "",
+                    page=fitz_page,
+                )
+                structured_text = structure.to_full_text()
+                if len(structured_text.strip()) > 10:
+                    content = structured_text
+                    doc_metadata["doc_type"] = "full_table"
+                    doc_metadata["table_html"] = table_html_str
 
-            doc = Document(page_content=content, metadata=doc_metadata)
-            documents.append(doc)
+                    doc = Document(page_content=content, metadata=doc_metadata)
+                    documents.append(doc)
 
-        logger.info("Parsed %d tables from HTML for %s", len(documents), document_name)
+                    for ci, field in enumerate(structure.fields):
+                        chunk_text = f"{field.path} : {field.value}"
+                        if not chunk_text.strip():
+                            continue
+                        chunk_meta = dict(doc_metadata)
+                        chunk_meta["doc_type"] = "cell_chunk"
+                        chunk_meta["parent_table_id"] = table_id
+                        chunk_meta["chunk_index"] = ci
+                        chunk_meta["hierarchy_path"] = field.path
+                        chunk_meta["key_field"] = field.key
+                        chunk_meta["depth"] = field.depth
+                        if field.supplementary:
+                            chunk_meta["bounding_box"] = [0, 0, 0, 0]
+                        documents.append(Document(page_content=chunk_text, metadata=chunk_meta))
+                else:
+                    content_parts = []
+                    if table_title:
+                        content_parts.append(table_title)
+                    if table_context:
+                        content_parts.append(table_context)
+                    content_parts.append(table_html_str)
+                    content = "\n".join(content_parts)
+                    doc = Document(page_content=content, metadata=doc_metadata)
+                    documents.append(doc)
+            except Exception:
+                content_parts = []
+                if table_title:
+                    content_parts.append(table_title)
+                if table_context:
+                    content_parts.append(table_context)
+                content_parts.append(table_html_str)
+                content = "\n".join(content_parts)
+                doc = Document(page_content=content, metadata=doc_metadata)
+                documents.append(doc)
+
+        if fitz_doc:
+            fitz_doc.close()
+
+        logger.info("Parsed %d documents from HTML for %s", len(documents), document_name)
 
         self._last_documents = documents
         self._last_output_dir = conv_dir
