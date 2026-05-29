@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { TableGroupSuggestion } from './types';
+import type { AuthConfig, AuthStatus, TableGroupSuggestion } from './types';
 import * as api from './api/client';
 import { BASE } from './api/client';
 import { useAppStore } from './store/useAppStore';
@@ -12,6 +12,8 @@ import CreditReviewView from './components/CreditReviewView';
 import UnifiedSearchView from './components/UnifiedSearchView';
 import TranslationView from './components/TranslationView';
 import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
+import LoginScreen from './components/LoginScreen';
+import SessionTimeoutGuard from './components/SessionTimeoutGuard';
 
 export default function App() {
   const sessionId = useAppStore((s) => s.sessionId);
@@ -30,11 +32,71 @@ export default function App() {
   const prevSessionIdRef = useRef(sessionId);
 
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+
+  const isAuthenticated = authStatus?.authenticated === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAuth = async () => {
+      try {
+        const config = await api.getAuthConfig();
+        if (cancelled) return;
+        setAuthConfig(config);
+        if (!config.enabled) {
+          setAuthStatus({ authenticated: true, user: null, ...config });
+          return;
+        }
+        const status = await api.getCurrentAuth();
+        if (!cancelled) {
+          setAuthStatus(status);
+          setAuthConfig(status);
+        }
+      } catch {
+        if (!cancelled) setAuthStatus(null);
+      } finally {
+        if (!cancelled) setIsAuthChecking(false);
+      }
+    };
+    void loadAuth();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleLogin = useCallback((status: AuthStatus) => {
+    setAuthStatus(status);
+    setAuthConfig(status);
+  }, []);
+
+  const handleAuthExpired = useCallback(() => {
+    setAuthStatus(null);
+    localStorage.removeItem('pdftablesearch_session_id');
+    useAppStore.setState({
+      activeTab: 'main',
+      sessionId: '',
+      sessionName: '',
+      pdfs: [],
+      totalTables: 0,
+      totalPages: 0,
+      selectedPdfs: [],
+      results: [],
+      smartResult: null,
+      qaMessages: [],
+      tableQAs: {},
+      unifiedResult: null,
+      unifiedFollowups: [],
+      isLoading: false,
+      isUnifiedSearchLoading: false,
+      documentChunksReady: false,
+      highlightRegion: null,
+    });
+  }, []);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
     try {
-      const res = await fetch(`${BASE}/sessions`, {
+      const res = await api.apiFetch(`${BASE}/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -59,7 +121,7 @@ export default function App() {
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId || did404Ref.current) return;
+    if (!isAuthenticated || !sessionId || did404Ref.current) return;
     let cancelled = false;
     api.listPdfs(sessionId).then((data) => {
       if (cancelled) return;
@@ -82,7 +144,7 @@ export default function App() {
       }
     });
     return () => { cancelled = true; };
-  }, [sessionId, setPdfs, setSession, restoreFromStorage]);
+  }, [isAuthenticated, sessionId, setPdfs, setSession, restoreFromStorage]);
 
   const handleUploadComplete = useCallback((_sid: string, pdfData: Record<string, { table_count: number; page_count: number }>, totalTables: number, totalPages: number) => {
     const pdfList = Object.entries(pdfData).map(([name, info]) => ({
@@ -147,14 +209,24 @@ export default function App() {
     }
   }, [sessionId, handleUploadComplete, setUploading, handleCreateSession]);
 
-  const isDocView = activeTab === 'document';
-
   const tabStyle = (tabId: string): React.CSSProperties => ({
     display: activeTab === tabId ? 'flex' : 'none',
     flexDirection: 'column',
     flex: 1,
     minHeight: 0,
   });
+
+  if (isAuthChecking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-surface text-sm text-text-secondary">
+        로그인 상태 확인 중...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
 
   if (!sessionId) {
     return (
@@ -166,12 +238,23 @@ export default function App() {
         </div>
         <h1 className="text-2xl font-bold text-text-primary mb-2">PDF Intelligence Portal</h1>
         <p className="text-sm text-text-muted mb-8">AI 기반 문서 분석 & 질의응답을 시작하려면 세션을 만들어주세요</p>
-        <button
-          onClick={handleCreateSession}
-          className="px-8 py-3 bg-primary text-white rounded-xl text-base font-medium hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
-        >
-          새 세션 시작하기
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleCreateSession}
+            className="px-8 py-3 bg-primary text-white rounded-md text-base font-medium hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
+          >
+            새 세션 시작하기
+          </button>
+          <button
+            onClick={() => { void api.logout().finally(handleAuthExpired); }}
+            className="px-5 py-3 border border-border text-text-secondary rounded-md text-base font-medium hover:bg-surface-elevated transition-colors"
+          >
+            로그아웃
+          </button>
+        </div>
+        {authConfig?.enabled && (
+          <SessionTimeoutGuard config={authConfig} onExpired={handleAuthExpired} />
+        )}
       </div>
     );
   }
@@ -189,7 +272,7 @@ export default function App() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TabBar />
-        <SessionHeader />
+        <SessionHeader onLogout={() => { void api.logout().finally(handleAuthExpired); }} />
 
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <div style={tabStyle('main')} className="overflow-y-auto p-6">
@@ -219,6 +302,9 @@ export default function App() {
           suggestions={tableGroupSuggestions}
           onComplete={() => { setTableGroupSuggestions([]); useAppStore.getState().bumpOverlayVersion(); }}
         />
+      )}
+      {authConfig?.enabled && (
+        <SessionTimeoutGuard config={authConfig} onExpired={handleAuthExpired} />
       )}
     </div>
   );

@@ -40,6 +40,24 @@ class Settings(BaseSettings):
     pdf_portal_ui_port: int = 8110
     pdf_portal_hybrid_port: int = 8112
 
+    # -- Web Auth -------------------------------------------------------------
+
+    auth_enabled: bool = True
+    auth_idle_timeout_seconds: int = 600
+    auth_warn_before_seconds: int = 60
+    auth_session_ttl_seconds: int = 3600
+    auth_cookie_secure: bool = False
+    auth_dev_users: str = "123456:1234:Developer User:user,admin:admin:Administrator:admin"
+
+    ldap_server: Optional[str] = None
+    ldap_base_dn: str = "DC=hc,DC=com"
+    ldap_bind_dn: Optional[str] = None
+    ldap_bind_password: Optional[str] = None
+    ldap_user_filter: str = "(uid={username})"
+    ldap_name_attr: str = "cn"
+    ldap_department_attr: str = "departmentNumber"
+    ldap_roles_attr: str = "memberOf"
+
     # -- Ollama LLM -----------------------------------------------------------
     ollama_api_key: Optional[str] = None
     zai_llm_endpoint: str = "https://ollama.com/v1"

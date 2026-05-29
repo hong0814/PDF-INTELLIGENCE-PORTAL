@@ -563,7 +563,7 @@ function SourcePopup({ source, onClose }: { source: UnifiedSource; onClose: () =
   useEffect(() => {
     if (!isTable || !source.table_id) return;
     if (source.merged_table_html) return;
-    fetch(`${BASE}/documents/tables?name=${encodeURIComponent(source.pdf)}&session_id=${encodeURIComponent(sessionId)}`)
+    api.apiFetch(`${BASE}/documents/tables?name=${encodeURIComponent(source.pdf)}&session_id=${encodeURIComponent(sessionId)}`)
       .then(r => r.json())
       .then(data => {
         const tbl = (data.tables || []).find((t: any) => t.table_id === source.table_id);

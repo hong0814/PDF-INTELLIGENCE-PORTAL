@@ -25,13 +25,24 @@ import pandas as pd
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
+from pdftablesearch.auth import (
+    AUTH_COOKIE,
+    auth_config,
+    authenticate_login,
+    clear_auth_cookies,
+    create_auth_session,
+    end_auth_session,
+    set_auth_cookies,
+    validate_auth_request,
+)
+from pdftablesearch.config import get_settings
 from pdftablesearch.llm_client import ZaiLLMClient
 from pdftablesearch.pii_masking import mask_pii_in_html, mask_pii_text
 from pdftablesearch.translation import translate_html
@@ -79,6 +90,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _auth_exempt(path: str) -> bool:
+    return path.startswith("/api/auth/") or path == "/api/health"
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    settings = get_settings()
+    if (
+        not settings.auth_enabled
+        or request.method == "OPTIONS"
+        or not request.url.path.startswith("/api/")
+        or _auth_exempt(request.url.path)
+    ):
+        return await call_next(request)
+
+    session = validate_auth_request(request)
+    if session is None:
+        response = JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+        )
+        clear_auth_cookies(response)
+        return response
+    return await call_next(request)
 
 
 def _get_embeddings() -> SentenceTransformerEmbeddings:
@@ -166,6 +203,70 @@ class CreateSessionRequest(BaseModel):
 
 class UpdateSessionRequest(BaseModel):
     name: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/api/auth/config")
+async def auth_config_endpoint() -> JSONResponse:
+    return JSONResponse(content=auth_config())
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> JSONResponse:
+    settings = get_settings()
+    if not settings.auth_enabled:
+        return JSONResponse(content={"authenticated": True, "user": None, **auth_config()})
+
+    session = validate_auth_request(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return JSONResponse(
+        content={
+            "authenticated": True,
+            "user": session.user.to_dict(),
+            **auth_config(),
+        }
+    )
+
+
+@app.post("/api/auth/ldap")
+async def auth_ldap(body: LoginRequest) -> JSONResponse:
+    user = authenticate_login(body.username.strip(), body.password)
+    session = create_auth_session(user)
+    response = JSONResponse(
+        content={
+            "authenticated": True,
+            "user": user.to_dict(),
+            **auth_config(),
+        }
+    )
+    set_auth_cookies(response, session)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request) -> JSONResponse:
+    end_auth_session(request.cookies.get(AUTH_COOKIE))
+    response = JSONResponse(content={"ok": True})
+    clear_auth_cookies(response)
+    return response
+
+
+@app.post("/api/auth/touch")
+async def auth_touch(request: Request) -> JSONResponse:
+    session = validate_auth_request(request)
+    if session is None:
+        response = JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+        )
+        clear_auth_cookies(response)
+        return response
+    return JSONResponse(content={"ok": True, **auth_config()})
 
 
 def _get_session(session_id: Optional[str]) -> dict:

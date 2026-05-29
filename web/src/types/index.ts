@@ -95,6 +95,26 @@ export interface SessionsResponse {
   total: number;
 }
 
+export interface AuthUser {
+  user_id: string;
+  username: string;
+  name: string;
+  department_id: string;
+  roles: string[];
+}
+
+export interface AuthConfig {
+  enabled: boolean;
+  idle_timeout_seconds: number;
+  warn_before_seconds: number;
+  session_ttl_seconds: number;
+}
+
+export interface AuthStatus extends AuthConfig {
+  authenticated: boolean;
+  user: AuthUser | null;
+}
+
 export interface TableQAItem {
   question: string;
   answer: string;

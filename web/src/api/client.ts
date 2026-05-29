@@ -6,14 +6,57 @@ import type {
   PdfsResponse,
   UnifiedSearchResponse,
   UnifiedSource,
+  AuthConfig,
+  AuthStatus,
 } from '../types';
 
 export const BASE = '/api';
+export const AUTH_EXPIRED_EVENT = 'pdf-auth-expired';
+
+export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, { credentials: 'include', ...init });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+  return res;
+}
+
+export async function getAuthConfig(): Promise<AuthConfig> {
+  const res = await apiFetch(`${BASE}/auth/config`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getCurrentAuth(): Promise<AuthStatus> {
+  const res = await apiFetch(`${BASE}/auth/me`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function loginWithLdap(username: string, password: string): Promise<AuthStatus> {
+  const res = await apiFetch(`${BASE}/auth/ldap`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function logout(): Promise<void> {
+  const res = await apiFetch(`${BASE}/auth/logout`, { method: 'POST' });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function touchAuth(): Promise<void> {
+  const res = await apiFetch(`${BASE}/auth/touch`, { method: 'POST' });
+  if (!res.ok) throw new Error(await res.text());
+}
 
 export async function uploadPdfs(files: File[], sessionId: string): Promise<UploadResponse> {
   const formData = new FormData();
   files.forEach((f) => formData.append('files', f));
-  const res = await fetch(`${BASE}/upload`, {
+  const res = await apiFetch(`${BASE}/upload`, {
     method: 'POST',
     body: formData,
     headers: { 'X-Session-ID': sessionId },
@@ -30,7 +73,7 @@ export async function search(
 ): Promise<SearchResponse> {
   const body: Record<string, unknown> = { query, max_results: maxResults };
   if (pdfNames && pdfNames.length > 0) body.pdf_names = pdfNames;
-  const res = await fetch(`${BASE}/search`, {
+  const res = await apiFetch(`${BASE}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify(body),
@@ -45,7 +88,7 @@ export async function smartSearch(
   sessionId: string,
   onProgress: (event: ProgressEvent) => void,
 ): Promise<SmartSearchResponse> {
-  const res = await fetch(`${BASE}/smart-search`, {
+  const res = await apiFetch(`${BASE}/smart-search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify({ query, pdf_name: pdfName }),
@@ -101,7 +144,7 @@ export async function askQuestion(
   sessionId: string,
   onToken: (token: string) => void,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/qa`, {
+  const res = await apiFetch(`${BASE}/qa`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify({ question, table_html: tableHtml, table_title: tableTitle }),
@@ -139,13 +182,13 @@ export async function askQuestion(
 }
 
 export async function listPdfs(sessionId: string): Promise<PdfsResponse> {
-  const res = await fetch(`${BASE}/pdfs`, { headers: { 'X-Session-ID': sessionId } });
+  const res = await apiFetch(`${BASE}/pdfs`, { headers: { 'X-Session-ID': sessionId } });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function deletePdf(name: string, sessionId: string): Promise<void> {
-  const res = await fetch(`${BASE}/pdfs/${encodeURIComponent(name)}`, {
+  const res = await apiFetch(`${BASE}/pdfs/${encodeURIComponent(name)}`, {
     method: 'DELETE',
     headers: { 'X-Session-ID': sessionId },
   });
@@ -153,7 +196,7 @@ export async function deletePdf(name: string, sessionId: string): Promise<void> 
 }
 
 export async function getDocumentHtml(pdfName: string, sessionId: string): Promise<string> {
-  const res = await fetch(`${BASE}/documents/html?name=${encodeURIComponent(pdfName)}`, {
+  const res = await apiFetch(`${BASE}/documents/html?name=${encodeURIComponent(pdfName)}`, {
     headers: { 'X-Session-ID': sessionId },
   });
   if (!res.ok) throw new Error(await res.text());
@@ -169,7 +212,7 @@ export async function askDocument(
 ): Promise<void> {
   const body: Record<string, unknown> = { question };
   if (pdfNames && pdfNames.length > 0) body.pdf_names = pdfNames;
-  const res = await fetch(`${BASE}/ask-document`, {
+  const res = await apiFetch(`${BASE}/ask-document`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify(body),
@@ -213,7 +256,7 @@ export async function confirmTableGroups(
   rejected: { group_id: string; table_ids: string[] }[],
   sessionId: string,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/confirm-table-groups`, {
+  const res = await apiFetch(`${BASE}/confirm-table-groups`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify({
@@ -226,13 +269,13 @@ export async function confirmTableGroups(
 }
 
 export async function getSessions(): Promise<import('../types').SessionsResponse> {
-  const res = await fetch(`${BASE}/sessions`);
+  const res = await apiFetch(`${BASE}/sessions`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getSession(sessionId: string): Promise<import('../types').SessionInfo> {
-  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}`);
+  const res = await apiFetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -240,7 +283,7 @@ export async function getSession(sessionId: string): Promise<import('../types').
 export async function getQaResults(sessionId: string): Promise<{
   results: { qa_key: string; question: string; answer: string; done: boolean }[];
 }> {
-  const res = await fetch(`${BASE}/qa-results`, {
+  const res = await apiFetch(`${BASE}/qa-results`, {
     headers: { 'X-Session-ID': sessionId },
   });
   if (!res.ok) throw new Error(await res.text());
@@ -252,7 +295,7 @@ export async function getPageHtml(
   page: number,
   sessionId: string,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${BASE}/documents/page-html?name=${encodeURIComponent(pdfName)}&page=${page}`,
     { headers: { 'X-Session-ID': sessionId } },
   );
@@ -265,7 +308,7 @@ export async function getTranslatedPage(
   page: number,
   sessionId: string,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${BASE}/translated-page?name=${encodeURIComponent(pdfName)}&page=${page}`,
     { headers: { 'X-Session-ID': sessionId } },
   );
@@ -281,7 +324,7 @@ export async function startHtmlTranslation(
   onPageDone: (page: number, totalPages: number, originalHtml: string, translatedHtml: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/translate-html`, {
+  const res = await apiFetch(`${BASE}/translate-html`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -334,7 +377,7 @@ export async function unifiedSearch(
 ): Promise<UnifiedSearchResponse> {
   const body: Record<string, unknown> = { query };
   if (pdfNames && pdfNames.length > 0) body.pdf_names = pdfNames;
-  const res = await fetch(`${BASE}/unified-search`, {
+  const res = await apiFetch(`${BASE}/unified-search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify(body),
@@ -389,7 +432,7 @@ export async function unifiedFollowup(
   onToken: (token: string) => void,
   onSources?: (sources: UnifiedSource[]) => void,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/unified-followup`, {
+  const res = await apiFetch(`${BASE}/unified-followup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
     body: JSON.stringify({ question, context, sources_json: sourcesJson }),

@@ -125,7 +125,7 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
     try {
-      const res = await fetch(`${BASE}/sessions`, {
+      const res = await api.apiFetch(`${BASE}/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -336,7 +336,7 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
                       e.stopPropagation();
                       if (!confirm(`"${session.name}" 세션을 삭제할까요?`)) return;
                       try {
-                        await fetch(`${BASE}/sessions/${session.session_id}`, { method: 'DELETE' });
+                        await api.apiFetch(`${BASE}/sessions/${session.session_id}`, { method: 'DELETE' });
                         if (session.session_id === sessionId) {
                           localStorage.removeItem('pdftablesearch_session_id');
                           setSession('', '');

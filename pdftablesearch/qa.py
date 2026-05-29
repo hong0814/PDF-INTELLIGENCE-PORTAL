@@ -40,6 +40,7 @@ def _run_tests(include_weaviate: bool = False) -> int:
         "--extra",
         "dev",
         "pytest",
+        "tests/test_auth.py",
         "tests/test_vectorstore.py",
         "tests/test_core.py",
         "tests/test_models.py",
