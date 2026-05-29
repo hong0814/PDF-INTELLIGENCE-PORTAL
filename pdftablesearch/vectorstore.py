@@ -248,15 +248,28 @@ class TableVectorStore:
                         persist_directory=self.persist_dir,
                     )
 
-                self._vectorstore.add_texts(
-                    texts=store_texts,
-                    metadatas=metadatas,
-                    embeddings=pre_embeddings,
-                )
-                logger.info(
-                    "Stored %d documents%s", len(store_texts),
-                    " (pre-embedded + encrypted)" if use_encryption else "",
-                )
+                ids = [f"doc_{i}_{hashlib.md5((store_texts[i] if isinstance(store_texts[i], str) else str(store_texts[i])).encode()).hexdigest()[:8]}" for i in range(len(store_texts))]
+
+                if pre_embeddings is not None:
+                    # Use pre-computed embeddings directly — avoids double
+                    # embedding since LangChain Chroma.add_texts() ignores the
+                    # embeddings kwarg and always calls embedding_function.
+                    self._vectorstore._collection.upsert(
+                        ids=ids,
+                        documents=store_texts,
+                        embeddings=pre_embeddings,
+                        metadatas=metadatas,
+                    )
+                    logger.info(
+                        "Stored %d documents (pre-embedded)%s", len(store_texts),
+                        " + encrypted" if use_encryption else "",
+                    )
+                else:
+                    self._vectorstore.add_texts(
+                        texts=store_texts,
+                        metadatas=metadatas,
+                    )
+                    logger.info("Stored %d documents", len(store_texts))
 
                 self._persist()
                 return self._vectorstore.get()["ids"]
