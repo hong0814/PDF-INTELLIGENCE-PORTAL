@@ -1,7 +1,7 @@
 """FastAPI web server for PDFTableSearch React frontend.
 
 Session-based API that replaces the Streamlit app. Each user session gets
-its own temporary upload directory and ChromaDB persist directory.
+its own temporary upload directory and vector-store namespace.
 
 Run with::
 
@@ -47,6 +47,14 @@ _sessions: Dict[str, dict] = {}
 _embeddings: Optional[SentenceTransformerEmbeddings] = None
 
 
+class _CleanupEmbeddings:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return [0.0]
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _embeddings
@@ -59,7 +67,6 @@ async def lifespan(application: FastAPI):
                 shutil.rmtree(d, ignore_errors=True)
             except Exception:
                 pass
-    _embeddings = SentenceTransformerEmbeddings()
     yield
 
 
@@ -75,7 +82,50 @@ app.add_middleware(
 
 
 def _get_embeddings() -> SentenceTransformerEmbeddings:
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = SentenceTransformerEmbeddings()
     return _embeddings
+
+
+def _get_vector_store(
+    *,
+    embeddings: Optional[SentenceTransformerEmbeddings],
+    persist_dir: str,
+    session_id: Optional[str],
+    collection_name: Optional[str] = None,
+):
+    store = TableVectorStore(
+        embeddings=embeddings,
+        persist_dir=persist_dir,
+        collection_name=collection_name,
+    )
+    if session_id and hasattr(store, "session_id"):
+        store.session_id = session_id
+    return store
+
+
+def _cleanup_vector_indexes(session_id: str, session: dict) -> None:
+    embeddings = _embeddings or _CleanupEmbeddings()
+    targets = [
+        (session.get("chroma_dir"), None),
+        (session.get("doc_chunks_dir"), f"doc_chunks_{session_id}"),
+    ]
+    for persist_dir, collection_name in targets:
+        if not persist_dir:
+            continue
+        try:
+            store = _get_vector_store(
+                embeddings=embeddings,
+                persist_dir=persist_dir,
+                session_id=session_id,
+                collection_name=collection_name,
+            )
+            deleted = store.delete_where({"session_id": session_id})
+            if not deleted:
+                store.reset()
+        except Exception:
+            pass
 
 
 class SearchRequest(BaseModel):
@@ -166,7 +216,11 @@ def _format_results(
     results: list[TableSearchResult] = []
     for doc, score in search_results:
         results.append(TableSearchResult.from_langchain_document(doc, score))
-    results.sort(key=lambda r: r.relevance_score or float("inf"))
+    results.sort(
+        key=lambda r: r.relevance_score
+        if r.relevance_score is not None
+        else float("inf")
+    )
     return results
 
 
@@ -484,9 +538,10 @@ def _chunk_and_index_session(session_id: str) -> None:
 
     embeddings = _get_embeddings()
 
-    vector_store = TableVectorStore(
+    vector_store = _get_vector_store(
         embeddings=embeddings,
         persist_dir=new_dir,
+        session_id=session_id,
         collection_name=f"doc_chunks_{session_id}",
     )
 
@@ -496,6 +551,10 @@ def _chunk_and_index_session(session_id: str) -> None:
 
         docs.append(Document(page_content=chunk, metadata=meta))
 
+    try:
+        vector_store.reset()
+    except Exception:
+        pass
     vector_store.add_documents(docs, skip_existing=False)
 
     # Build BM25 index for keyword search
@@ -1263,6 +1322,7 @@ async def create_session(body: CreateSessionRequest) -> JSONResponse:
     session: Dict[str, Any] = {
         "upload_dir": upload_dir,
         "chroma_dir": chroma_dir,
+        "doc_chunks_dir": tempfile.mkdtemp(prefix="pdf_docchunks_"),
         "pdfs": {},
         "searcher": None,
         "name": body.name or "",
@@ -1303,12 +1363,16 @@ async def delete_session(session_id: str) -> JSONResponse:
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     session = _sessions.pop(session_id)
+    _cleanup_vector_indexes(session_id, session)
     upload_dir = session.get("upload_dir")
     chroma_dir = session.get("chroma_dir")
+    doc_chunks_dir = session.get("doc_chunks_dir")
     if upload_dir:
         shutil.rmtree(upload_dir, ignore_errors=True)
     if chroma_dir:
         shutil.rmtree(chroma_dir, ignore_errors=True)
+    if doc_chunks_dir:
+        shutil.rmtree(doc_chunks_dir, ignore_errors=True)
     return JSONResponse(content={"deleted": session_id})
 
 
@@ -1873,7 +1937,7 @@ async def upload_pdfs(
                 all_docs.append(LCDocument(page_content=content, metadata=doc_meta))
                 pymupdf_only_count += 1
         if pymupdf_only_count:
-            print(f"[index] Added {pymupdf_only_count} PyMuPDF-only tables to ChromaDB for {filename}")
+            print(f"[index] Added {pymupdf_only_count} PyMuPDF-only tables for {filename}")
 
         session["pdfs"][filename] = {
             "path": str(dest),
@@ -1902,9 +1966,10 @@ async def upload_pdfs(
 
     if total_tables > 0 and all_docs:
         embeddings = _get_embeddings()
-        vector_store = TableVectorStore(
+        vector_store = _get_vector_store(
             embeddings=embeddings,
             persist_dir=chroma_dir,
+            session_id=session_id,
         )
         # Only reset if this is a fresh session (no existing PDFs before this upload)
         if not session_has_existing_pdfs:
@@ -1966,6 +2031,21 @@ async def delete_pdf(
     if pdf_path:
         Path(pdf_path).unlink(missing_ok=True)
 
+    embeddings = _embeddings or _CleanupEmbeddings()
+    table_store = _get_vector_store(
+        embeddings=embeddings,
+        persist_dir=session["chroma_dir"],
+        session_id=x_session_id,
+    )
+    table_store.delete_where({"document_name": filename})
+    doc_store = _get_vector_store(
+        embeddings=embeddings,
+        persist_dir=session["doc_chunks_dir"],
+        session_id=x_session_id,
+        collection_name=f"doc_chunks_{x_session_id}",
+    )
+    doc_store.delete_where({"source_pdf": filename})
+
     pdfs = [
         {"name": name, "table_count": info["table_count"]}
         for name, info in session["pdfs"].items()
@@ -1992,9 +2072,10 @@ async def search(
 
     try:
         embeddings = _get_embeddings()
-        vector_store = TableVectorStore(
+        vector_store = _get_vector_store(
             embeddings=embeddings,
             persist_dir=chroma_dir,
+            session_id=x_session_id,
         )
 
         search_results = vector_store.similarity_search(
@@ -2048,9 +2129,10 @@ async def smart_search_endpoint(
     def generate():
         try:
             embeddings = _get_embeddings()
-            vector_store = TableVectorStore(
+            vector_store = _get_vector_store(
                 embeddings=embeddings,
                 persist_dir=chroma_dir,
+                session_id=x_session_id,
             )
 
             progress_callback("vector", "벡터 검색 중...", 20)
@@ -2383,9 +2465,10 @@ async def ask_document(
 
     embeddings = _get_embeddings()
 
-    vector_store = TableVectorStore(
+    vector_store = _get_vector_store(
         embeddings=embeddings,
         persist_dir=session["doc_chunks_dir"],
+        session_id=x_session_id,
         collection_name=f"doc_chunks_{x_session_id}",
     )
 
@@ -2752,17 +2835,19 @@ async def unified_search_endpoint(
         try:
             # --- Phase 1: Vector search on pdf_tables ---
             progress_callback("vector", "문서 검색 중...", 20)
-            table_store = TableVectorStore(
+            table_store = _get_vector_store(
                 embeddings=embeddings,
                 persist_dir=session["chroma_dir"],
+                session_id=x_session_id,
             )
             table_results = table_store.similarity_search(query=body.query, k=15)
 
             # --- Phase 2: Hybrid search on doc_chunks ---
             progress_callback("text", "텍스트 검색 중...", 40)
-            doc_store = TableVectorStore(
+            doc_store = _get_vector_store(
                 embeddings=embeddings,
                 persist_dir=session["doc_chunks_dir"],
+                session_id=x_session_id,
                 collection_name=f"doc_chunks_{x_session_id}",
             )
             doc_vector_results = doc_store.similarity_search(query=body.query, k=8)

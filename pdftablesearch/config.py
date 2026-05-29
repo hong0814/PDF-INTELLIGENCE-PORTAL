@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     zai_embedding_endpoint: str = "https://api.z.ai/api/embeddings"
     zai_embedding_model: str = "embedding-3"
 
+    pdf_portal_host: str = "127.0.0.1"
+    pdf_portal_port: int = 8111
+    pdf_portal_ui_port: int = 8110
+    pdf_portal_hybrid_port: int = 8112
+
     # -- Ollama LLM -----------------------------------------------------------
     ollama_api_key: Optional[str] = None
     zai_llm_endpoint: str = "https://ollama.com/v1"
@@ -50,6 +55,23 @@ class Settings(BaseSettings):
 
     chroma_persist_dir: str = "./.chroma"
     chroma_collection_name: str = "pdf_tables"
+
+    # -- Vector Backend -------------------------------------------------------
+
+    vector_backend: str = "weaviate"
+
+    # -- Weaviate -------------------------------------------------------------
+
+    weaviate_host: str = "127.0.0.1"
+    weaviate_port: int = 8113
+    weaviate_grpc_port: int = 8114
+    weaviate_use_embedded: bool = True
+    weaviate_data_dir: str = "./db/weaviate"
+    weaviate_cluster_hostname: str = "Embedded_at_50851"
+    weaviate_table_collection: str = "PdfTable"
+    weaviate_chunk_collection: str = "PdfChunk"
+    weaviate_hybrid_alpha: float = 0.6
+    weaviate_search_mode: str = "vector"
 
     # -- Processing -----------------------------------------------------------
 

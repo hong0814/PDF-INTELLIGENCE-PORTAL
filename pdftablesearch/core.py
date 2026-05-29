@@ -25,6 +25,7 @@ from langchain_core.documents import Document
 from tqdm import tqdm
 
 from pdftablesearch.exceptions import TableSearchError, VectorSearchError
+from pdftablesearch.embeddings import ZaiEmbeddings
 from pdftablesearch.loader import PDFProcessor
 from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
 from pdftablesearch.models import (
@@ -33,7 +34,8 @@ from pdftablesearch.models import (
     ProcessingResult,
     TableSearchResult,
 )
-from pdftablesearch.utils import get_logger
+from pdftablesearch.reranker import ZaiRerankCompressor
+from pdftablesearch.utils import get_api_key, get_logger
 from pdftablesearch.vectorstore import TableVectorStore
 
 logger = get_logger(__name__)
@@ -417,8 +419,6 @@ def _execute_search_with_rerank(
     """
     if use_llm_rerank and search_results:
         try:
-            from pdftablesearch.reranker import ZaiRerankCompressor
-
             compressor = ZaiRerankCompressor(
                 top_k=max_results,
             )
@@ -457,7 +457,11 @@ def _format_search_results(
 
     # Sort by relevance score ascending (lower ChromaDB distance = better)
     # and then reverse so best results come first
-    results.sort(key=lambda r: r.relevance_score or float("inf"))
+    results.sort(
+        key=lambda r: r.relevance_score
+        if r.relevance_score is not None
+        else float("inf")
+    )
     return results
 
 
@@ -526,7 +530,7 @@ def _apply_per_doc_limit(
     filtered: List[TableSearchResult] = []
 
     for result in results:
-        doc_name = result.document_name
+        doc_name = result.document_name or result.table_id
         current_count = doc_counts.get(doc_name, 0)
 
         if current_count < max_per_doc:

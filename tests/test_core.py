@@ -54,6 +54,26 @@ class TestFormatSearchResults:
         # ChromaDB distance: lower = better, so 0.5 comes first
         assert results[0].relevance_score == 0.5
 
+    def test_zero_distance_sorts_first(self):
+        docs = [
+            (
+                Document(
+                    page_content="best",
+                    metadata={"page_number": 0, "bounding_box": [], "table_id": "best", "document_name": "a.pdf"},
+                ),
+                0.0,
+            ),
+            (
+                Document(
+                    page_content="other",
+                    metadata={"page_number": 1, "bounding_box": [], "table_id": "other", "document_name": "a.pdf"},
+                ),
+                0.5,
+            ),
+        ]
+        results = _format_search_results(docs)
+        assert results[0].table_id == "best"
+
     def test_empty_input(self):
         results = _format_search_results([])
         assert results == []
@@ -168,7 +188,7 @@ class TestSearchTablesSingleDocument:
     """Tests for search_tables with a single PDF path (str)."""
 
     @patch("pdftablesearch.core.TableVectorStore")
-    @patch("pdftablesearch.core.ZaiEmbeddings")
+    @patch("pdftablesearch.core.SentenceTransformerEmbeddings")
     @patch("pdftablesearch.core.PDFProcessor")
     @patch("pdftablesearch.core.get_api_key", return_value="test-key")
     def test_single_doc_no_tables(
@@ -184,7 +204,7 @@ class TestSearchTablesSingleDocument:
         assert isinstance(result, list)
 
     @patch("pdftablesearch.core.TableVectorStore")
-    @patch("pdftablesearch.core.ZaiEmbeddings")
+    @patch("pdftablesearch.core.SentenceTransformerEmbeddings")
     @patch("pdftablesearch.core.PDFProcessor")
     @patch("pdftablesearch.core.get_api_key", return_value="test-key")
     def test_single_doc_with_results(
@@ -217,7 +237,7 @@ class TestSearchTablesSingleDocument:
         assert results[0].table_id == "table_0_0"
 
     @patch("pdftablesearch.core.TableVectorStore")
-    @patch("pdftablesearch.core.ZaiEmbeddings")
+    @patch("pdftablesearch.core.SentenceTransformerEmbeddings")
     @patch("pdftablesearch.core.PDFProcessor")
     @patch("pdftablesearch.core.get_api_key", return_value="test-key")
     def test_single_doc_with_reranking(
@@ -264,7 +284,7 @@ class TestSearchTablesMultiDocument:
 
     @patch("pdftablesearch.core._load_all_documents_sequential", return_value=[])
     @patch("pdftablesearch.core.TableVectorStore")
-    @patch("pdftablesearch.core.ZaiEmbeddings")
+    @patch("pdftablesearch.core.SentenceTransformerEmbeddings")
     @patch("pdftablesearch.core.PDFProcessor")
     @patch("pdftablesearch.core.get_api_key", return_value="test-key")
     def test_multi_doc_no_documents_found(
@@ -282,7 +302,7 @@ class TestSearchTablesMultiDocument:
 
     @patch("pdftablesearch.core._load_all_documents_sequential")
     @patch("pdftablesearch.core.TableVectorStore")
-    @patch("pdftablesearch.core.ZaiEmbeddings")
+    @patch("pdftablesearch.core.SentenceTransformerEmbeddings")
     @patch("pdftablesearch.core.PDFProcessor")
     @patch("pdftablesearch.core.get_api_key", return_value="test-key")
     def test_multi_doc_with_results(
@@ -314,7 +334,7 @@ class TestSearchTablesMultiDocument:
 
     @patch("pdftablesearch.core._load_all_documents_sequential")
     @patch("pdftablesearch.core.TableVectorStore")
-    @patch("pdftablesearch.core.ZaiEmbeddings")
+    @patch("pdftablesearch.core.SentenceTransformerEmbeddings")
     @patch("pdftablesearch.core.PDFProcessor")
     @patch("pdftablesearch.core.get_api_key", return_value="test-key")
     def test_multi_doc_with_per_doc_limit(

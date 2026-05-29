@@ -22,6 +22,7 @@ import fitz
 import opendataloader_pdf
 from langchain_core.documents import Document
 
+from pdftablesearch.config import get_settings
 from pdftablesearch.exceptions import PDFProcessingError, TableParsingError
 from pdftablesearch.models import ProcessingResult
 from pdftablesearch.utils import get_logger, validate_pdf_path
@@ -92,7 +93,8 @@ class PDFProcessor:
             }
             if use_hybrid:
                 convert_params["hybrid"] = "docling-fast"
-                convert_params["hybrid_url"] = "http://localhost:5002"
+                hybrid_port = get_settings().pdf_portal_hybrid_port
+                convert_params["hybrid_url"] = f"http://localhost:{hybrid_port}"
                 try:
                     opendataloader_pdf.convert(**convert_params)
                 except TypeError:

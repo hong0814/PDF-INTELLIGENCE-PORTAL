@@ -6,7 +6,7 @@ PDF 문서에서 표와 텍스트를 통합 검색하고, AI 기반 질의응답
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev/)
 [![LangChain](https://img.shields.io/badge/langchain-0.1.0-green.svg)](https://github.com/langchain-ai/langchain)
-[![ChromaDB](https://img.shields.io/badge/ChromaDB-0.4.0-orange.svg)](https://www.trychroma.com/)
+[![Weaviate](https://img.shields.io/badge/Weaviate-local%20embedded-yellow.svg)](https://weaviate.io/)
 [![Ollama](https://img.shields.io/badge/Ollama-gpt--oss:120b-purple.svg)](https://ollama.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -67,7 +67,7 @@ PDF 문서에서 표와 텍스트를 통합 검색하고, AI 기반 질의응답
 
 ### 3. 표 검색 (Table Search)
 
-PDF 문서에서 추출된 표를 의미적으로 검색합니다. ChromaDB 벡터 데이터베이스와 로컬 임베딩 모델을 사용하여 관련성 높은 표를 찾아줍니다.
+PDF 문서에서 추출된 표를 의미적으로 검색합니다. Weaviate 또는 ChromaDB 벡터 데이터베이스와 로컬 임베딩 모델을 사용하여 관련성 높은 표를 찾아줍니다.
 
 **Smart Search 모드**: 검색된 여러 표 중 AI(LLM)가 가장 관련성 높은 표 하나를 자동으로 선택해 보여줍니다.
 
@@ -88,7 +88,7 @@ PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스�
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                        사용자 (Browser)                          │
-│                  http://localhost:8000                           │
+│                  http://localhost:8110                           │
 └──────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -126,7 +126,7 @@ PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스�
             ┌───────────────────┼───────────────────┐
             ▼                   ▼                   ▼
 ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
-│ opendataloader-pdf│ │ SentenceTransformers│ │  ChromaDB         │
+│ opendataloader-pdf│ │ SentenceTransformers│ │ Weaviate/Chroma   │
 │ (PDF → HTML/JSON) │ │ (로컬 임베딩)       │ │ (벡터 저장소)     │
 │                   │ │ BAAI/bge-m3        │ │                   │
 │ Hybrid Mode:      │ │                    │ │ pdf_tables        │
@@ -156,12 +156,12 @@ PDF 업로드
   → 다중페이지 표 연결 감지 (chain detection)
   → LangChain Document 생성 (table_html + metadata)
   → SentenceTransformer 임베딩 (bge-m3, 로컬 CPU)
-  → ChromaDB 저장 (pdf_tables + doc_chunks 컬렉션)
+  → Vector backend 저장 (Weaviate 기본, Chroma fallback)
 
 문서 청킹 (텍스트 검색용)
   → HTML에서 표 제거 + 페이지 구분자로 분할
   → RecursiveCharacterTextSplitter (1000자 청크)
-  → ChromaDB 저장 (doc_chunks 컬렉션)
+  → Vector backend 저장 (doc_chunks 논리 컬렉션)
   → BM25 인덱스 생성 (한국어 토크나이징)
 ```
 
@@ -169,8 +169,8 @@ PDF 업로드
 
 #### 통합 문서 검색 (Unified Search)
 ```
-쿼리 → ChromaDB pdf_tables 검색 (k=10)     ─┐
-     → ChromaDB doc_chunks 검색 (k=10)      ─┤
+쿼리 → vector pdf_tables 검색 (k=10)       ─┐
+     → vector doc_chunks 검색 (k=10)        ─┤
      → BM25 키워드 검색 (k=10)              ─┤
                                                 ├→ RRF Fusion
      ← 상위 표/텍스트 결과 병합             ─┤
@@ -182,8 +182,17 @@ PDF 업로드
 
 #### 표 검색
 ```
-쿼리 → SentenceTransformer 임베딩 → ChromaDB similarity search → 결과 반환
+쿼리 → SentenceTransformer 임베딩 → vector similarity search → 결과 반환
 (선택: Smart Search → 상위 20개 후보 → LLM이 최적 표 1개 선택)
+```
+
+#### 텍스트 검색 (Document QA)
+```
+쿼리 → SentenceTransformer 임베딩 → vector 검색 (k=8)
+     → BM25 키워드 검색 (k=8)
+     → RRF Fusion (Reciprocal Rank Fusion)
+     → 상위 5개 청크 → LLM에 컨텍스트로 전달
+     → SSE 스트리밍으로 답변 생성 + 출처 페이지 반환
 ```
 
 ---
@@ -238,35 +247,19 @@ PDF 업로드
 git clone https://github.com/hong0814/PDF-INTELLIGENCE-PORTAL.git
 cd PDF-INTELLIGENCE-PORTAL
 
-# 2. Python 가상환경 설정
-python -m venv .venv
-source .venv/bin/activate
+# 2. Python workspace/Node 의존성 설치 및 React 빌드
+uv sync --all-packages --extra dev
+uv run ui-build
 
-# 3. Python 패키지 설치
-pip install -e .
+# 3. 환경 변수 설정
+cp .env.example .env
 
-# 4. 하이브리드 변환 서버 시작 (OCR 지원)
-opendataloader-pdf-hybrid --port 5002 &
-
-# 5. 환경 변수 설정 (.env 파일)
-cat > .env << 'EOF'
-OLLAMA_API_KEY=your_ollama_api_key_here
-ZAI_LLM_ENDPOINT=https://ollama.com/v1
-ZAI_LLM_MODEL=gpt-oss:120b
-EOF
-
-# 6. 프론트엔드 빌드
-cd web
-npm install
-npm run build
-cd ..
-
-# 7. 서버 실행
-uvicorn pdftablesearch.web_server:app --reload --port 8000
-
-# 8. 브라우저에서 접속
-open http://localhost:8000
+# 4. Weaviate 백엔드로 전체 서비스 실행
+uv run all
+open http://localhost:8110
 ```
+
+> 현재 기본 벡터 backend는 Weaviate입니다. ChromaDB adapter는 rollback/fallback 용도로 남겨두었고, 필요할 때만 `VECTOR_BACKEND=chroma`로 전환합니다.
 
 ---
 
@@ -283,6 +276,54 @@ open http://localhost:8000
 OLLAMA_API_KEY=your_ollama_api_key_here
 ZAI_LLM_ENDPOINT=https://ollama.com/v1
 ZAI_LLM_MODEL=gpt-oss:120b
+
+# Vector backend 설정
+VECTOR_BACKEND=weaviate
+WEAVIATE_DATA_DIR=./db/weaviate
+```
+
+`VECTOR_BACKEND=chroma`로 바꾸면 기존 ChromaDB fallback 경로를 사용할 수 있습니다.
+
+#### Weaviate 설치 방식
+
+이 프로젝트는 **embedded Weaviate**를 사용합니다. 별도 Docker 컨테이너나 시스템 전역 Weaviate 설치 없이, Python dependency와 로컬 데이터 디렉터리만으로 실행합니다.
+
+설치 흐름:
+
+```bash
+# 1. uv workspace 전체 의존성 설치
+uv sync --all-packages --extra dev
+
+# 2. weaviate-client 설치 확인
+uv run python -c "import weaviate; print(weaviate.__version__)"
+
+# 3. embedded Weaviate background 실행
+uv run qa start weaviate
+
+# 4. readiness 확인
+curl http://127.0.0.1:8113/v1/.well-known/ready
+```
+
+관련 설정:
+
+| 설정 | 기본값 | 설명 |
+|---|---|---|
+| `VECTOR_BACKEND` | `weaviate` | API가 사용할 벡터 backend |
+| `WEAVIATE_USE_EMBEDDED` | `true` | Python runner가 embedded Weaviate 실행 |
+| `WEAVIATE_HOST` | `127.0.0.1` | Weaviate host |
+| `WEAVIATE_PORT` | `8113` | Weaviate HTTP port |
+| `WEAVIATE_GRPC_PORT` | `8114` | Weaviate gRPC port |
+| `WEAVIATE_DATA_DIR` | `./db/weaviate` | 로컬 persistence 경로 |
+
+처음 실행하면 `db/weaviate/` 아래에 Weaviate 데이터 파일이 생성됩니다. 이 데이터 파일들은 `.gitignore` 대상이고, 디렉터리 존재를 나타내는 `.gitkeep`만 추적합니다.
+
+기존 `.env`를 이미 만들어 둔 경우 `VECTOR_BACKEND=chroma`가 남아 있을 수 있습니다. Weaviate로 실행하려면 `.env`를 다음처럼 맞춥니다.
+
+```bash
+VECTOR_BACKEND=weaviate
+WEAVIATE_PORT=8113
+WEAVIATE_GRPC_PORT=8114
+WEAVIATE_DATA_DIR=./db/weaviate
 ```
 
 > 임베딩은 로컬 `BAAI/bge-m3` 모델을 사용하므로 별도 API 키가 필요하지 않습니다.
@@ -311,74 +352,141 @@ curl -s https://ollama.com/api/tags \
 OCR 기반의 고품질 PDF 변환을 위해 `docling-fast` 서버를 실행해야 합니다:
 
 ```bash
-# 서버 시작 (백그라운드)
-opendataloader-pdf-hybrid --port 5002 &
+# 서버 시작
+uv run qa start hybrid
 
 # 상태 확인
-curl http://localhost:5002/health
+curl http://localhost:8112/health
 ```
+
+전체 로컬 스택이 필요하면 `uv run all` 또는 대화형 `uv run qa`에서 E2E QA를 선택하세요.
 
 > 하이브리드 서버가 없으면 표준 변환 모드로 자동 폴백(fallback)됩니다. 표 인식률이 떨어질 수 있습니다.
 
 #### FastAPI 서버 실행
 
 ```bash
-# 개발 모드 (자동 리로드)
-uvicorn pdftablesearch.web_server:app --reload --port 8000
+# uv runner
+uv run api start --port 8111
 
-# 프로덕션 모드
-uvicorn pdftablesearch.web_server:app --host 0.0.0.0 --port 8000
+# backend package를 직접 지정해도 동일
+uv run --package pdftablesearch api start --port 8111
+
+# Weaviate backend로 실행하려면 먼저 Weaviate 실행
+uv run qa start weaviate
+uv run api start --port 8111
 ```
 
-서버가 시작되면 `http://localhost:8000/api/health` 에서 상태를 확인할 수 있습니다.
+서버가 시작되면 `http://localhost:8111/api/health` 에서 상태를 확인할 수 있습니다.
+
+#### Weaviate 백엔드 실행
+
+Weaviate는 embedded local server로 실행되며 기본 포트와 저장 위치는 다음과 같습니다.
+
+| 항목 | 기본값 |
+|---|---|
+| HTTP | `127.0.0.1:8113` |
+| gRPC | `127.0.0.1:8114` |
+| Data directory | `db/weaviate/` |
+| Cluster hostname | `Embedded_at_50851` |
+| Table collection | `PdfTable` |
+| Chunk collection | `PdfChunk` |
+
+```bash
+# Weaviate만 foreground 실행
+uv run weaviate
+
+# 전체 서비스를 Weaviate backend로 실행
+uv run all
+
+# 상태 확인
+uv run qa status
+curl http://127.0.0.1:8113/v1/.well-known/ready
+```
+
+`db/weaviate/.gitkeep`만 git에 남기고 실제 Weaviate 데이터 파일은 `.gitignore`로 제외합니다.
 
 ### 2. 프론트엔드 설정
 
 ```bash
-cd web
-
 # 의존성 설치
-npm install
+uv run --package pdf-intelligence-web ui-build
 
 # 개발 서버 (HMR 지원)
-npm run dev
+uv run ui
 
 # 프로덕션 빌드
-npm run build
+uv run ui-build
 
 # 빌드 미리보기
-npm run preview
+uv run ui-preview
 ```
 
-개발 모드(`npm run dev`)는 기본적으로 `http://localhost:5173`에서 실행되며, API 요청을 `localhost:8000`으로 프록시합니다.
+개발 모드(`uv run ui`)는 내부적으로 `web/package.json`의 `npm run dev`를 실행합니다. 기본적으로 `http://localhost:8110`에서 실행되며, API 요청을 `localhost:8111`으로 프록시합니다.
 
 ### 3. 전체 실행 (한 번에)
 
 ```bash
-# 터미널 1: 하이브리드 서버
-opendataloader-pdf-hybrid --port 5002
+# 전체 서비스 시작 (Weaviate backend)
+uv run all
 
-# 터미널 2: FastAPI 백엔드
-uvicorn pdftablesearch.web_server:app --reload --port 8000
+# 대화형 QA 런처
+uv run qa
 
-# 터미널 3: React 개발 서버 (선택)
-cd web && npm run dev
+# 상태 확인
+uv run qa status
+
+# 서비스 명령 확인
+uv run qa commands
+
+# 회귀 테스트
+uv run qa test
+
+# Weaviate 통합 테스트는 먼저 Weaviate를 background로 띄운 뒤 실행
+uv run qa start weaviate
+uv run qa test --weaviate
+
+# 전체 서비스 중지
+uv run killports
+
+# Weaviate만 foreground 실행
+uv run weaviate
 ```
+
+`uv run all`은 다음 서비스를 순서대로 시작하고 readiness를 확인합니다.
+
+| 서비스 | 명령 | 포트 |
+|---|---|---|
+| Weaviate | `uv run --package pdftablesearch weaviate` | `8113`, `8114` |
+| Hybrid PDF | `uv run --package pdftablesearch opendataloader-pdf-hybrid --port 8112` | `8112` |
+| API | `uv run --package pdftablesearch api start --host 127.0.0.1 --port 8111` | `8111` |
+| UI | `uv run --package pdf-intelligence-web ui --host 127.0.0.1 --port 8110` | `8110` |
+
+이 포털 런처는 Redis, Postgres, LDAP를 시작하지 않습니다. 다른 프로젝트의 Redis/Postgres/LDAP 기본 포트와 충돌하지 않도록 이 포털의 포트는 `8110-8114` 대역을 사용합니다.
+
+각 실행의 로그는 `logs/qa_YYYYMMDD_HHMMSS/` 아래에 `weaviate.log`, `hybrid.log`, `api.log`, `ui.log`로 저장됩니다.
 
 ---
 
 ## 프로젝트 구조
 
-```
-pdftablesearch/
-├── pdftablesearch/          # Python 백엔드 패키지
+```text
+PDF-INTELLIGENCE-PORTAL/
+├── pyproject.toml           # uv workspace root, root command aliases
+├── uv.lock                  # uv workspace lockfile
+├── portal_workspace/        # root scripts를 노출하기 위한 작은 Python 패키지
+├── pdftablesearch/          # Python backend workspace package
+│   ├── pyproject.toml       # backend 의존성 및 api/qa/weaviate scripts
 │   ├── __init__.py          # 패키지 초기화, 퍼블릭 API
-│   ├── web_server.py        # FastAPI 웹 서버 (API 라우트, 통합 검색)
+│   ├── web_server.py        # FastAPI 웹 서버 (세션 관리, API 라우트, 통합 검색)
+│   ├── run.py               # api/pdf-portal 실행 entrypoint
+│   ├── qa.py                # uv run qa 대화형 런처
+│   ├── port_utils.py        # 서비스 registry, port kill/start/status
 │   ├── core.py              # 코어 검색 로직
 │   ├── search.py            # 검색 인터페이스
 │   ├── smart_search.py      # Smart Search (LLM 표 선택)
 │   ├── table_qa.py          # 표 기반 질의응답
-│   ├── vectorstore.py       # ChromaDB 벡터 저장소 래퍼
+│   ├── vectorstore.py       # 벡터 저장소 backend facade
 │   ├── embedding_provider.py # 임베딩 제공자 인터페이스
 │   ├── local_embeddings.py  # 로컬 SentenceTransformer 임베딩
 │   ├── embeddings.py        # API 임베딩 (fallback)
@@ -390,14 +498,24 @@ pdftablesearch/
 │   ├── models.py            # 데이터 모델
 │   ├── exceptions.py        # 커스텀 예외
 │   ├── utils.py             # 유틸리티
-│   └── loader/              # PDF 로딩 및 테이블 추출
+│   ├── loader/              # PDF 로딩 및 테이블 추출
 │       ├── __init__.py      # PDFProcessor
 │       ├── html_parser.py   # HTML 테이블 추출, Markdown 변환
 │       ├── json_parser.py   # JSON 메타데이터 파싱
 │       ├── markdown_parser.py # Markdown 테이블 파싱
 │       └── matcher.py       # HTML↔JSON 매칭
+│   └── vectorstores/        # Chroma/Weaviate backend adapters
+│       ├── chroma_store.py
+│       ├── weaviate_store.py
+│       ├── weaviate_client.py
+│       ├── weaviate_schema.py
+│       └── weaviate_server.py
 │
-├── web/                     # React 프론트엔드
+├── web/                     # React frontend workspace package + npm app
+│   ├── pyproject.toml       # uv wrapper scripts: ui/ui-build/ui-preview/ui-lint
+│   ├── package.json         # npm/Vite 의존성의 실제 source of truth
+│   ├── pdf_intelligence_web/
+│   │   └── cli.py           # uv script -> npm script wrapper
 │   ├── src/
 │   │   ├── App.tsx          # 메인 앱 컴포넌트
 │   │   ├── main.tsx         # 진입점
@@ -420,12 +538,16 @@ pdftablesearch/
 │   │       ├── MainScreen.tsx        # 메인 대시보드
 │   │       └── ProgressBar.tsx       # 진행 상태 표시
 │   ├── vite.config.ts       # Vite 설정 (프록시 등)
-│   └── package.json         # npm 의존성
+│   └── tailwind.config.js   # Tailwind CSS 설정
 │
+├── db/
+│   └── weaviate/            # embedded Weaviate data directory (.gitkeep only tracked)
 ├── tests/                   # Python 테스트
 ├── docs/                    # 문서
-├── pyproject.toml           # Python 프로젝트 설정
-└── .env                     # 환경 변수 (gitignore)
+├── examples/                # 사용 예제
+├── .env.example             # 환경 변수 예제
+├── requirements-web.txt     # 웹 의존성
+└── run_web_demo.sh          # Streamlit 데모 실행 스크립트 (deprecated)
 ```
 
 ---
@@ -447,7 +569,8 @@ pdftablesearch/
 | | PyMuPDF (fitz) | 1.24+ |
 | | BeautifulSoup4 | 4.12+ |
 | **임베딩** | SentenceTransformers (bge-m3) | 2.0+ |
-| **벡터 DB** | ChromaDB | 0.4+ |
+| | z.ai Embedding API | embedding-3 |
+| **벡터 DB** | Weaviate / ChromaDB fallback | 4.16+ / 0.4+ |
 | **LLM** | Ollama Cloud (gpt-oss:120b) | - |
 | **검색** | BM25Okapi (rank-bm25) | 0.2+ |
 | **데이터** | Pandas | 2.0+ |
@@ -460,10 +583,10 @@ pdftablesearch/
 
 ```bash
 # 서버 상태 확인
-curl http://localhost:5002/health
+curl http://localhost:8112/health
 
 # 서버가 없으면 시작
-opendataloader-pdf-hybrid --port 5002 &
+uv run qa start hybrid
 ```
 
 하이브리드 서버가 없으면 표준 변환 모드로 자동 폴백됩니다。표 인식률이 떨어질 수 있으니 가능하면 실행하세요。
@@ -489,10 +612,17 @@ PyMuPDF의 `find_tables()`가 표를 감지하지 못하는 경우가 있습니�
 
 ### 문제: PDF 업로드 실패 (ChromaDB readonly)
 
-upload 중 "attempt to write a readonly database" 에러가 발생하면:
+`VECTOR_BACKEND=chroma` fallback 사용 중 upload에서 "attempt to write a readonly database" 에러가 발생하면:
 
 - `vectorstore.py`가 자동으로 디렉토리를 재생성하여 재시도 (최대 2회)
 - 서버를 재시작하여 `/tmp` 내 임시 파일 정리
+
+Weaviate backend로 전환하려면:
+
+```bash
+uv run killports
+uv run all
+```
 
 ### 문제: 페이지 번호와 내용 불일치
 
