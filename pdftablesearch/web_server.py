@@ -225,6 +225,8 @@ def _tokenize_korean(text: str) -> list[str]:
 # Paragraph-based HTML chunker
 # ---------------------------------------------------------------------------
 
+_HEADING_TAGS = frozenset(["h1", "h2", "h3", "h4", "h5", "h6", "figcaption"])
+
 _BLOCK_TAGS = frozenset([
     "p", "h1", "h2", "h3", "h4", "h5", "h6",
     "li", "blockquote", "pre", "div",
@@ -235,11 +237,6 @@ _PARA_MAX_CHARS = 1500
 
 
 def _extract_blocks_from_html(page_html: str) -> list[str]:
-    """Extract top-level text blocks from page HTML using BeautifulSoup.
-
-    Returns a list of plain-text strings, one per semantic block.
-    Tables (<table>) are excluded since they are indexed separately.
-    """
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(page_html, "html.parser")
@@ -274,6 +271,61 @@ def _extract_blocks_from_html(page_html: str) -> list[str]:
             text = child.get_text(separator=" ", strip=True)
             if text:
                 blocks.append(text)
+
+    return blocks
+
+
+def _extract_blocks_with_headings(page_html: str) -> list[tuple[str, str]]:
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(page_html, "html.parser")
+
+    for tag in soup.find_all("table"):
+        tag.decompose()
+
+    blocks: list[tuple[str, str]] = []
+    heading_stack: list[tuple[int, str]] = []
+
+    for child in soup.children:
+        if not hasattr(child, "name") or child.name is None:
+            text = str(child).strip()
+            if text:
+                section = " > ".join(h for _, h in heading_stack)
+                blocks.append((text, section))
+            continue
+
+        tag_name = child.name.lower()
+
+        if tag_name == "table":
+            continue
+
+        if tag_name in _HEADING_TAGS:
+            heading_text = child.get_text(separator=" ", strip=True)
+            if not heading_text:
+                continue
+            level = int(tag_name[1]) if tag_name[0] == "h" else 3
+            heading_stack = [(lv, txt) for lv, txt in heading_stack if lv < level]
+            heading_stack.append((level, heading_text))
+            section = " > ".join(h for _, h in heading_stack)
+            blocks.append((heading_text, section))
+            continue
+
+        if tag_name in _BLOCK_TAGS:
+            text = child.get_text(separator=" ", strip=True)
+            if text:
+                section = " > ".join(h for _, h in heading_stack)
+                blocks.append((text, section))
+        elif tag_name in ("ul", "ol"):
+            for li in child.find_all("li", recursive=False):
+                text = li.get_text(separator=" ", strip=True)
+                if text:
+                    section = " > ".join(h for _, h in heading_stack)
+                    blocks.append((text, section))
+        else:
+            text = child.get_text(separator=" ", strip=True)
+            if text:
+                section = " > ".join(h for _, h in heading_stack)
+                blocks.append((text, section))
 
     return blocks
 
@@ -316,35 +368,31 @@ def _split_html_by_paragraphs(
     page_html: str,
     pdf_name: str,
     page_num: int,
-) -> list[tuple[str, str]]:
-    """Split page HTML into paragraph-based chunks.
-
-    Returns list of (chunk_text, paragraph_id) tuples.
-    paragraph_id format: ``{pdf_name}_p{page_num}_para{n}``
-    """
-    raw_blocks = _extract_blocks_from_html(page_html)
+) -> list[tuple[str, str, str]]:
+    raw_blocks = _extract_blocks_with_headings(page_html)
 
     if not raw_blocks:
         return []
 
-    merged: list[str] = []
-    for block in raw_blocks:
-        if merged and len(block) < _PARA_MIN_CHARS:
-            merged[-1] = merged[-1] + " " + block
+    merged: list[tuple[str, str]] = []
+    for text, section in raw_blocks:
+        if merged and len(text) < _PARA_MIN_CHARS:
+            merged[-1] = (merged[-1][0] + " " + text, merged[-1][1] or section)
         else:
-            merged.append(block)
+            merged.append((text, section))
 
-    final_blocks: list[str] = []
-    for block in merged:
-        final_blocks.extend(_split_long_text(block))
+    final_blocks: list[tuple[str, str]] = []
+    for text, section in merged:
+        for piece in _split_long_text(text):
+            final_blocks.append((piece, section))
 
-    result: list[tuple[str, str]] = []
+    result: list[tuple[str, str, str]] = []
     safe_pdf = re.sub(r"[^a-zA-Z0-9가-힣_-]", "_", pdf_name)
-    for i, text in enumerate(final_blocks):
+    for i, (text, section) in enumerate(final_blocks):
         if not text.strip():
             continue
         para_id = f"{safe_pdf}_p{page_num}_para{i + 1}"
-        result.append((text.strip(), para_id))
+        result.append((text.strip(), para_id, section))
 
     return result
 
@@ -389,7 +437,7 @@ def _chunk_and_index_session(session_id: str) -> None:
             if not para_chunks:
                 continue
             total = len(para_chunks)
-            for i, (text, para_id) in enumerate(para_chunks):
+            for i, (text, para_id, section) in enumerate(para_chunks):
                 page_estimate = max(1, int(i * pdf_page_count / max(total, 1)) + 1)
                 all_chunks.append(text)
                 all_metadatas.append({
@@ -400,6 +448,8 @@ def _chunk_and_index_session(session_id: str) -> None:
                     "paragraph_id": re.sub(
                         r"_p\d+_para", f"_p{page_estimate}_para", para_id
                     ),
+                    "section_path": section,
+                    "doc_type": "text",
                 })
             continue
 
@@ -413,7 +463,7 @@ def _chunk_and_index_session(session_id: str) -> None:
             page_num = int(page_num_str)
 
             para_chunks = _split_html_by_paragraphs(page_html, pdf_name, page_num)
-            for text, para_id in para_chunks:
+            for text, para_id, section in para_chunks:
                 all_chunks.append(text)
                 all_metadatas.append({
                     "source_pdf": pdf_name,
@@ -421,6 +471,8 @@ def _chunk_and_index_session(session_id: str) -> None:
                     "page_number": page_num,
                     "pdf_page_count": pdf_page_count,
                     "paragraph_id": para_id,
+                    "section_path": section,
+                    "doc_type": "text",
                 })
 
     if not all_chunks:
@@ -555,9 +607,7 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
                 fbbox = list(ft.bbox)
                 pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
 
-                current_bbox = t.get("bounding_box", [])
-                if not current_bbox or current_bbox == [0, 0, 0, 0]:
-                    t["bounding_box"] = [round(v, 2) for v in pdf_bbox]
+                t["bounding_box"] = [round(v, 2) for v in pdf_bbox]
 
                 y_top_pymupdf = fbbox[1]
                 clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
@@ -877,8 +927,6 @@ def _build_tables_from_pymupdf(
             inner_ids.append(f"fitz_p{inner_fitz[inner_idx]['page']}_{inner_fitz[inner_idx]['fi']}_inner")
 
         final_bbox = [round(v, 2) for v in o["pdf_bbox"]]
-        if source == "hybrid" and hybrid_bbox and hybrid_bbox != [0, 0, 0, 0]:
-            final_bbox = [round(v, 2) for v in hybrid_bbox]
 
         results.append({
             "table_id": f"fitz_p{o['page']}_{o['fi']}",
@@ -903,8 +951,22 @@ def _build_tables_from_pymupdf(
                 continue
             ht_copy = dict(ht)
             ht_copy["_source"] = "hybrid_fallback"
+            ht_bbox = ht_copy.get("bounding_box", [])
+            is_inner_hybrid = False
+            if ht_bbox and len(ht_bbox) >= 4 and ht_bbox != [0, 0, 0, 0]:
+                for r in results:
+                    r_bbox = r.get("bounding_box", [])
+                    if (r.get("page_number") == pn and r_bbox and len(r_bbox) >= 4
+                            and r_bbox[0] <= ht_bbox[0] and r_bbox[1] <= ht_bbox[1]
+                            and r_bbox[2] >= ht_bbox[2] and r_bbox[3] >= ht_bbox[3]):
+                        is_inner_hybrid = True
+                        break
+            if is_inner_hybrid:
+                print(f"[build] skip p{pn}: {ht_id} (inner of existing fitz table)")
+                continue
             results.append(ht_copy)
-            print(f"[build] fallback p{pn}: {ht_id} (no PyMuPDF match, using hybrid)")
+            print(f"[build] fallback p{pn}: {ht_id} (no PyMuPDF match, using hybrid)" +
+                   (" [inner]" if ht_copy.get("is_inner") else ""))
 
     print(f"[build] RESULT: {len(results)} outer tables "
           f"(standard={sum(1 for r in results if r['_source']=='standard')}, "
@@ -917,8 +979,10 @@ def _build_tables_from_pymupdf(
 def _detect_multipage_tables(
     tables: list[dict],
 ) -> list[dict]:
+    outer_tables = [t for t in tables if not t.get("is_inner") and t.get("_source") != "hybrid_fallback"]
+
     by_page: dict[int, list[dict]] = {}
-    for t in tables:
+    for t in outer_tables:
         pn = t.get("page_number", -1)
         by_page.setdefault(pn, []).append(t)
 
@@ -1361,8 +1425,13 @@ async def get_document_tables(
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
     tables = session["pdfs"][name].get("tables", [])
+    seen_ids = set()
     masked_tables = []
     for t in tables:
+        tid = t.get("table_id", "")
+        if tid in seen_ids:
+            continue
+        seen_ids.add(tid)
         mt = dict(t)
         if mt.get("table_html"):
             mt["table_html"] = mask_pii_in_html(mt["table_html"])
@@ -2687,8 +2756,7 @@ async def unified_search_endpoint(
                 embeddings=embeddings,
                 persist_dir=session["chroma_dir"],
             )
-            table_results = table_store.similarity_search(query=body.query, k=10)
-            table_candidates = _format_results(table_results)
+            table_results = table_store.similarity_search(query=body.query, k=15)
 
             # --- Phase 2: Hybrid search on doc_chunks ---
             progress_callback("text", "텍스트 검색 중...", 40)
@@ -2711,26 +2779,49 @@ async def unified_search_endpoint(
                 top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:8]
                 bm25_results = [(idx, scores[idx]) for idx in top_indices if scores[idx] > 0]
 
-            # RRF fusion for text chunks
+            # --- Unified RRF fusion (table + text combined) ---
             rrf_k = 60
             rrf_scores: dict[int, float] = {}
+            rrf_is_table: dict[int, bool] = {}
 
-            for rank, (doc, _score) in enumerate(doc_vector_results):
+            # Table vector results → unified pool
+            for rank, (doc, _score) in enumerate(table_results):
                 chunk_text = doc.page_content
                 for idx, c in enumerate(bm25_chunks):
                     if c == chunk_text:
                         rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                        rrf_is_table[idx] = True
                         break
                 else:
                     idx = len(bm25_chunks)
                     bm25_chunks.append(chunk_text)
                     bm25_metadatas.append(doc.metadata)
                     rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                    rrf_is_table[idx] = True
 
+            # Text vector results → unified pool
+            for rank, (doc, _score) in enumerate(doc_vector_results):
+                chunk_text = doc.page_content
+                for idx, c in enumerate(bm25_chunks):
+                    if c == chunk_text:
+                        rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                        if idx not in rrf_is_table:
+                            rrf_is_table[idx] = False
+                        break
+                else:
+                    idx = len(bm25_chunks)
+                    bm25_chunks.append(chunk_text)
+                    bm25_metadatas.append(doc.metadata)
+                    rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                    rrf_is_table[idx] = False
+
+            # BM25 text results → unified pool
             for rank, (idx, _score) in enumerate(bm25_results):
                 rrf_scores[idx] = rrf_scores.get(idx, 0) + 1.0 / (rrf_k + rank + 1)
+                if idx not in rrf_is_table:
+                    rrf_is_table[idx] = False
 
-            fused_indices = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:5]
+            fused_indices = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:8]
 
             # --- Phase 3: Build context for LLM ---
             progress_callback("llm", "AI 분석 중...", 70)
@@ -2738,67 +2829,82 @@ async def unified_search_endpoint(
             context_parts = []
             all_sources: list[dict] = []
             session_pdf_names = list(session.get("pdfs", {}).keys())
+            text_source_idx = 0
+            table_source_idx = 0
 
-            for i, idx in enumerate(fused_indices):
+            for idx in fused_indices:
+                is_table = rrf_is_table.get(idx, False)
                 chunk_text = bm25_chunks[idx]
-                masked_chunk = mask_pii_text(chunk_text)
                 meta = bm25_metadatas[idx] if idx < len(bm25_metadatas) else {}
-                context_parts.append(f"[텍스트출처{i+1}] {masked_chunk}")
-                source_text = mask_pii_text(chunk_text[:500])
-                source_pdf = meta.get("source_pdf", "")
-                if source_pdf and not any(p == source_pdf for p in session_pdf_names):
-                    for pn in session_pdf_names:
-                        if pn.startswith(source_pdf):
-                            source_pdf = pn
-                            break
-                all_sources.append({
-                    "type": "text",
-                    "pdf": source_pdf,
-                    "page_number": meta.get("page_number", 1),
-                    "text": source_text,
-                    "chunk_index": meta.get("chunk_index", 0),
-                })
 
-            # Add top table summaries
-            top_tables = table_candidates[:3]
-            table_context_parts = []
-            for i, tbl in enumerate(top_tables):
-                title = mask_pii_text(tbl.table_title or "(제목 없음)")
-                session_table = None
-                resolved_pdf_name = tbl.document_name
-                for _pn, _pinfo in session.get("pdfs", {}).items():
-                    for st in _pinfo.get("tables", []):
-                        if st.get("table_id") == tbl.table_id:
-                            session_table = st
-                            resolved_pdf_name = _pn
+                if is_table:
+                    table_source_idx += 1
+                    title = mask_pii_text(meta.get("table_title", "(제목 없음)"))
+                    table_id = meta.get("table_id", "")
+                    doc_name = meta.get("document_name", "")
+
+                    resolved_pdf_name = doc_name
+                    session_table = None
+                    for _pn, _pinfo in session.get("pdfs", {}).items():
+                        for st in _pinfo.get("tables", []):
+                            if st.get("table_id") == table_id:
+                                session_table = st
+                                resolved_pdf_name = _pn
+                                break
+                        if session_table:
                             break
-                    if session_table:
-                        break
-                if not any(p == resolved_pdf_name for p in session_pdf_names):
-                    for pn in session_pdf_names:
-                        if pn.startswith(tbl.document_name):
-                            resolved_pdf_name = pn
-                            break
-                merged_html = session_table.get("merged_table_html") if session_table else None
-                group_id = session_table.get("group_id") if session_table else None
-                group_table_ids = session_table.get("group_table_ids") if session_table else None
-                display_html = mask_pii_in_html(merged_html) if merged_html else mask_pii_in_html((tbl.table_html or "")[:300])
-                context_parts.append(f"[표출처{i+1}] 제목: {title}\n{display_html}")
-                table_context_parts.append(tbl)
-                bbox_val = tbl.bounding_box if hasattr(tbl, 'bounding_box') and tbl.bounding_box else None
-                if bbox_val and all(v == 0 for v in bbox_val):
-                    bbox_val = None
-                all_sources.append({
-                    "type": "table",
-                    "pdf": resolved_pdf_name,
-                    "page_number": tbl.page_number,
-                    "text": title,
-                    "table_id": tbl.table_id,
-                    "bounding_box": bbox_val,
-                    "merged_table_html": mask_pii_in_html(merged_html) if merged_html else None,
-                    "group_id": group_id,
-                    "group_table_ids": group_table_ids,
-                })
+                    if not any(p == resolved_pdf_name for p in session_pdf_names):
+                        for pn in session_pdf_names:
+                            if pn.startswith(doc_name):
+                                resolved_pdf_name = pn
+                                break
+
+                    merged_html = session_table.get("merged_table_html") if session_table else None
+                    if merged_html:
+                        try:
+                            from pdftablesearch.table_structure_extractor import extract_table_structure as _ets
+                            merged_struct = _ets(html=merged_html, table_id=table_id, table_title=title)
+                            display_text = mask_pii_text(merged_struct.to_full_text())
+                        except Exception:
+                            display_text = mask_pii_in_html(merged_html[:1500])
+                    else:
+                        display_text = mask_pii_text(chunk_text)
+
+                    context_parts.append(f"[표출처{table_source_idx}] 제목: {title}\n{display_text}")
+
+                    bbox_val = meta.get("bounding_box", [0,0,0,0])
+                    if bbox_val and all(v == 0 for v in bbox_val):
+                        bbox_val = None
+
+                    all_sources.append({
+                        "type": "table",
+                        "pdf": resolved_pdf_name,
+                        "page_number": meta.get("page_number", 1),
+                        "text": title,
+                        "table_id": table_id,
+                        "bounding_box": bbox_val,
+                        "merged_table_html": mask_pii_in_html(merged_html) if merged_html else None,
+                        "group_id": session_table.get("group_id") if session_table else None,
+                        "group_table_ids": session_table.get("group_table_ids") if session_table else None,
+                    })
+                else:
+                    text_source_idx += 1
+                    masked_chunk = mask_pii_text(chunk_text)
+                    context_parts.append(f"[텍스트출처{text_source_idx}] {masked_chunk}")
+                    source_text = mask_pii_text(chunk_text[:500])
+                    source_pdf = meta.get("source_pdf", "")
+                    if source_pdf and not any(p == source_pdf for p in session_pdf_names):
+                        for pn in session_pdf_names:
+                            if pn.startswith(source_pdf):
+                                source_pdf = pn
+                                break
+                    all_sources.append({
+                        "type": "text",
+                        "pdf": source_pdf,
+                        "page_number": meta.get("page_number", 1),
+                        "text": source_text,
+                        "chunk_index": meta.get("chunk_index", 0),
+                    })
 
             context_text = "\n\n---\n\n".join(context_parts)
 
@@ -2858,7 +2964,7 @@ async def unified_search_endpoint(
             used_match = re.search(r'사용출처:\s*(.+)', accumulated)
             if used_match:
                 for part in used_match.group(1).split(','):
-                    part = part.strip()
+                    part = part.strip().replace('【', '').replace('】', '')
                     if part.startswith('텍스트'):
                         num_str = re.search(r'\d+', part)
                         if num_str:
@@ -2868,11 +2974,11 @@ async def unified_search_endpoint(
                         if num_str:
                             used_table_indices.append(int(num_str.group()) - 1)
 
-            for m in re.finditer(r'\[텍스트출처(\d+)\]', accumulated):
+            for m in re.finditer(r'[\[【]텍스트출처(\d+)[\]】]', accumulated):
                 idx = int(m.group(1)) - 1
                 if idx not in used_text_indices:
                     used_text_indices.append(idx)
-            for m in re.finditer(r'\[표출처(\d+)\]', accumulated):
+            for m in re.finditer(r'[\[【]표출처(\d+)[\]】]', accumulated):
                 idx = int(m.group(1)) - 1
                 if idx not in used_table_indices:
                     used_table_indices.append(idx)
@@ -2896,19 +3002,35 @@ async def unified_search_endpoint(
 
             # Serialize tables referenced in answer
             referenced_tables = []
-            for i, tbl in enumerate(table_context_parts):
-                if not used_table_indices or i in used_table_indices:
-                    serialized = _serialize_table(tbl)
-                    for _pn, _pinfo in session.get("pdfs", {}).items():
-                        for st in _pinfo.get("tables", []):
-                            if st.get("table_id") == tbl.table_id and st.get("merged_table_html"):
+            table_sources = [s for s in all_sources if s.get("type") == "table"]
+            for ts in table_sources:
+                tid = ts.get("table_id", "")
+                if not tid:
+                    continue
+                serialized = {
+                    "table_id": tid,
+                    "document_name": ts.get("pdf", ""),
+                    "page_number": ts.get("page_number", 1),
+                    "table_title": ts.get("text", ""),
+                    "table_html": "",
+                    "table_markdown": "",
+                    "relevance_score": None,
+                    "bounding_box": ts.get("bounding_box"),
+                    "merged_table_html": ts.get("merged_table_html"),
+                }
+                for _pn, _pinfo in session.get("pdfs", {}).items():
+                    for st in _pinfo.get("tables", []):
+                        if st.get("table_id") == tid:
+                            if st.get("merged_table_html"):
                                 serialized["table_html"] = mask_pii_in_html(st["merged_table_html"])
                                 serialized["merged_table_html"] = serialized["table_html"]
-                                break
-                        else:
-                            continue
-                        break
-                    referenced_tables.append(serialized)
+                            elif st.get("table_html"):
+                                serialized["table_html"] = mask_pii_in_html(st["table_html"])
+                            break
+                    else:
+                        continue
+                    break
+                referenced_tables.append(serialized)
 
             result_data = json.dumps({
                 "answer": accumulated,
