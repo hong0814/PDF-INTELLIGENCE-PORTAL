@@ -22,6 +22,9 @@ from pdftablesearch.utils import get_api_key, get_logger, truncate_text
 
 logger = get_logger(__name__)
 
+_CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+_cross_encoder_instance = None
+
 # ---------------------------------------------------------------------------
 # Default configuration
 # ---------------------------------------------------------------------------
@@ -245,3 +248,61 @@ class ZaiRerankCompressor:
         result = reranked[: self.top_k]
         logger.info("Re-ranking complete: %d documents returned", len(result))
         return result
+
+
+def _get_cross_encoder():
+    global _cross_encoder_instance
+    if _cross_encoder_instance is None:
+        from sentence_transformers import CrossEncoder
+        logger.info("Loading CrossEncoder model: %s", _CROSS_ENCODER_MODEL)
+        _cross_encoder_instance = CrossEncoder(_CROSS_ENCODER_MODEL)
+        logger.info("CrossEncoder model loaded")
+    return _cross_encoder_instance
+
+
+class CrossEncoderReranker:
+    """Local CrossEncoder reranker using msmarco-MiniLM-L-6-v2.
+
+    Fast CPU reranking (~45ms for 30 candidates) for improving search
+    result quality after initial vector/BM25 retrieval.
+
+    Args:
+        top_k: Maximum number of documents to return.
+    """
+
+    def __init__(self, top_k: int = 10) -> None:
+        self.top_k = top_k
+        self._model = None
+
+    def rerank(
+        self,
+        documents: List[Document],
+        query: str,
+    ) -> List[Document]:
+        if not documents:
+            return []
+
+        self._model = _get_cross_encoder()
+
+        pairs = [(query, doc.page_content) for doc in documents]
+
+        try:
+            scores = self._model.predict(pairs)
+        except Exception as exc:
+            logger.warning("CrossEncoder reranking failed: %s", exc)
+            return documents[: self.top_k]
+
+        scored = list(zip(documents, scores))
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        results = []
+        for doc, score in scored[: self.top_k]:
+            updated_meta = {**doc.metadata, "rerank_score": float(score)}
+            results.append(Document(page_content=doc.page_content, metadata=updated_meta))
+
+        logger.info(
+            "CrossEncoder reranked %d docs, top score: %.4f",
+            len(documents),
+            scored[0][1] if scored else 0,
+        )
+        return results
