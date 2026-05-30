@@ -1,0 +1,60 @@
+[project]
+name = "pdftablesearch"
+version = "0.1.0"
+description = "Semantic table search within PDF documents using LangChain, Weaviate/Chroma, and z.ai API"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "python-multipart>=0.0.5",
+    "beautifulsoup4>=4.12.0",
+    "pandas>=2.0.0",
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.20",
+    "langchain-core>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langchain-text-splitters>=0.0.1",
+    "opendataloader-pdf[hybrid]>=2.2.1",
+    "chromadb>=0.4.0",
+    "weaviate-client>=4.16.4",
+    "requests>=2.31.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+    "tqdm>=4.66.0",
+    "sentence-transformers>=2.0.0",
+    "pymupdf>=1.24.0",
+    "rank-bm25>=0.2.2",
+    "cryptography>=41.0.0",
+    "ldap3>=2.9.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.7.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+all = "pdftablesearch.port_utils:run_all"
+api = "pdftablesearch.run:main"
+killports = "pdftablesearch.port_utils:killports"
+pdf-portal = "pdftablesearch.run:main"
+qa = "pdftablesearch.qa:main"
+weaviate = "pdftablesearch.vectorstores.weaviate_server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"pdftablesearch" = "."}
+packages = [
+    "pdftablesearch",
+    "pdftablesearch.loader",
+    "pdftablesearch.vectorstores",
+]

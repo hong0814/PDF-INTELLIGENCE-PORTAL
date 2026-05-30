@@ -10,13 +10,10 @@ from __future__ import annotations
 
 from typing import List
 
-import os
-
-os.environ["HF_HUB_OFFLINE"] = "1"
-
 from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
 
+from pdftablesearch.config import get_settings
 from pdftablesearch.utils import get_logger
 
 logger = get_logger(__name__)
@@ -55,16 +52,17 @@ class SentenceTransformerEmbeddings(Embeddings):
 
     def __init__(
         self,
-        model_name: str = _DEFAULT_MODEL,
-        device: str = "cpu",
+        model_name: str | None = None,
+        device: str | None = None,
     ) -> None:
-        self.model_name = model_name
-        self.device = device
+        settings = get_settings()
+        self.model_name = model_name or settings.local_embedding_model or _DEFAULT_MODEL
+        self.device = device or settings.embedding_device
 
-        logger.info("Loading SentenceTransformer model: %s", model_name)
+        logger.info("Loading SentenceTransformer model: %s", self.model_name)
         self._model = SentenceTransformer(
-            model_name,
-            device=device,
+            self.model_name,
+            device=self.device,
             trust_remote_code=True,
         )
         logger.info("Model loaded successfully")

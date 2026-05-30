@@ -21,7 +21,7 @@ React + TypeScript + Vite 기반의 PDF 문서 분석 웹 애플리케이션 프
 # 의존성 설치
 npm install
 
-# 개발 서버 (HMR, localhost:5173)
+# 개발 서버 (HMR, localhost:8110)
 npm run dev
 
 # 프로덕션 빌드

@@ -2,7 +2,11 @@ import { useRef, useCallback, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
 
-export default function SessionHeader() {
+interface SessionHeaderProps {
+  onLogout?: () => void;
+}
+
+export default function SessionHeader({ onLogout }: SessionHeaderProps) {
   const sessionName = useAppStore((s) => s.sessionName);
   const pdfs = useAppStore((s) => s.pdfs);
   const totalTables = useAppStore((s) => s.totalTables);
@@ -117,6 +121,15 @@ export default function SessionHeader() {
         </svg>
         PDF 추가
       </div>
+      {onLogout && (
+        <button
+          type="button"
+          onClick={onLogout}
+          className="h-8 px-3 rounded-md border border-border text-xs font-medium text-text-secondary hover:bg-surface hover:text-text-primary transition-colors"
+        >
+          로그아웃
+        </button>
+      )}
     </header>
   );
 }

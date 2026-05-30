@@ -34,9 +34,35 @@ class Settings(BaseSettings):
     zai_api_key: Optional[str] = None
     zai_embedding_endpoint: str = "https://api.z.ai/api/embeddings"
     zai_embedding_model: str = "embedding-3"
-    zai_llm_endpoint: str = "https://api.z.ai/api/coding/paas/v4"
-    zai_llm_model: str = "glm-4.7"
-    zai_llm_rerank_model: str = "glm-4.7"
+
+    pdf_portal_host: str = "127.0.0.1"
+    pdf_portal_port: int = 8111
+    pdf_portal_ui_port: int = 8110
+    pdf_portal_hybrid_port: int = 8112
+
+    # -- Web Auth -------------------------------------------------------------
+
+    auth_enabled: bool = True
+    auth_idle_timeout_seconds: int = 600
+    auth_warn_before_seconds: int = 60
+    auth_session_ttl_seconds: int = 3600
+    auth_cookie_secure: bool = False
+    auth_dev_users: str = "123456:1234:Developer User:user,admin:admin:Administrator:admin"
+
+    ldap_server: Optional[str] = None
+    ldap_base_dn: str = "DC=hc,DC=com"
+    ldap_bind_dn: Optional[str] = None
+    ldap_bind_password: Optional[str] = None
+    ldap_user_filter: str = "(uid={username})"
+    ldap_name_attr: str = "cn"
+    ldap_department_attr: str = "departmentNumber"
+    ldap_roles_attr: str = "memberOf"
+
+    # -- Ollama LLM -----------------------------------------------------------
+    ollama_api_key: Optional[str] = None
+    zai_llm_endpoint: str = "https://ollama.com/v1"
+    zai_llm_model: str = "gpt-oss:120b"
+    zai_llm_rerank_model: str = "gpt-oss:120b"
 
     # -- Local Embeddings -----------------------------------------------------
 
@@ -47,6 +73,23 @@ class Settings(BaseSettings):
 
     chroma_persist_dir: str = "./.chroma"
     chroma_collection_name: str = "pdf_tables"
+
+    # -- Vector Backend -------------------------------------------------------
+
+    vector_backend: str = "weaviate"
+
+    # -- Weaviate -------------------------------------------------------------
+
+    weaviate_host: str = "127.0.0.1"
+    weaviate_port: int = 8113
+    weaviate_grpc_port: int = 8114
+    weaviate_use_embedded: bool = True
+    weaviate_data_dir: str = "./db/weaviate"
+    weaviate_cluster_hostname: str = "Embedded_at_50851"
+    weaviate_table_collection: str = "PdfTable"
+    weaviate_chunk_collection: str = "PdfChunk"
+    weaviate_hybrid_alpha: float = 0.6
+    weaviate_search_mode: str = "vector"
 
     # -- Processing -----------------------------------------------------------
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import type { PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem } from '../types';
+import type { PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem, UnifiedSearchResponse, UnifiedFollowupMessage } from '../types';
 
-export type TabId = 'main' | 'document' | 'search' | 'qa' | 'credit';
+export type TabId = 'main' | 'document' | 'search' | 'translation' | 'credit';
 
 export interface HighlightRegion {
   documentName: string;
@@ -14,6 +14,7 @@ export interface HighlightRegion {
 function searchKey(sid: string) { return `pdfts_${sid}_search`; }
 function qaKey(sid: string) { return `pdfts_${sid}_qa`; }
 function tableQaKey(sid: string) { return `pdfts_${sid}_tableqas`; }
+function unifiedKey(sid: string) { return `pdfts_${sid}_unified`; }
 
 function saveJson(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
@@ -44,6 +45,19 @@ interface AppState {
   isUploading: boolean;
   tableQAs: Record<string, TableQAItem[]>;
   highlightRegion: HighlightRegion | null;
+  sidebarCollapsed: boolean;
+  isTranslating: boolean;
+  translationProgress: string;
+  translatedPages: Record<string, Record<number, string>>;
+  unifiedResult: UnifiedSearchResponse | null;
+  unifiedFollowups: UnifiedFollowupMessage[];
+  isUnifiedSearchLoading: boolean;
+  overlayVersion: number;
+  bumpOverlayVersion: () => void;
+  setIsUnifiedSearchLoading: (loading: boolean) => void;
+  setTranslationProgress: (msg: string) => void;
+  setTranslatedPage: (pdfName: string, page: number, html: string) => void;
+  clearTranslationState: (pdfName?: string) => void;
   setActiveTab: (tab: TabId) => void;
   setSession: (id: string, name: string) => void;
   setPdfs: (pdfs: PdfInfo[], totalTables: number, totalPages: number) => void;
@@ -61,6 +75,12 @@ interface AppState {
   addTableQA: (tableId: string, entry: TableQAItem) => void;
   updateTableQA: (tableId: string, index: number, answer: string) => void;
   setHighlightRegion: (region: HighlightRegion | null) => void;
+  toggleSidebar: () => void;
+  setIsTranslating: (v: boolean) => void;
+  setUnifiedResult: (result: UnifiedSearchResponse | null) => void;
+  addUnifiedFollowup: (msg: UnifiedFollowupMessage) => void;
+  updateUnifiedFollowup: (id: string, updates: Partial<UnifiedFollowupMessage>) => void;
+  clearUnifiedSearch: () => void;
   restoreFromStorage: (sessionId: string) => void;
   reset: () => void;
 }
@@ -87,6 +107,7 @@ export const useAppStore = create<AppState>((set) => ({
   totalTables: 0,
   totalPages: 0,
   selectedPdfs: [],
+  lastSearchQuery: '',
   results: [],
   smartResult: null,
   searchTime: 0,
@@ -97,7 +118,15 @@ export const useAppStore = create<AppState>((set) => ({
   isUploading: false,
   tableQAs: {},
   highlightRegion: null,
-  lastSearchQuery: '',
+  sidebarCollapsed: false,
+  isTranslating: false,
+  translationProgress: '',
+  translatedPages: {},
+  unifiedResult: null,
+  unifiedFollowups: [],
+  isUnifiedSearchLoading: false,
+  overlayVersion: 0,
+  bumpOverlayVersion: () => set((s) => ({ overlayVersion: s.overlayVersion + 1 })),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -187,10 +216,61 @@ export const useAppStore = create<AppState>((set) => ({
     }
     if (qaData) patch.qaMessages = qaData;
     if (tableQaData) patch.tableQAs = tableQaData;
+    const unifiedData = loadJson<{ result: UnifiedSearchResponse; followups: UnifiedFollowupMessage[] }>(unifiedKey(sessionId));
+    if (unifiedData) {
+      patch.unifiedResult = unifiedData.result;
+      patch.unifiedFollowups = unifiedData.followups || [];
+    }
     if (Object.keys(patch).length > 0) set(patch);
   },
 
   setHighlightRegion: (region) => set({ highlightRegion: region }),
+
+  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+  setIsTranslating: (v) => set({ isTranslating: v }),
+  setIsUnifiedSearchLoading: (v) => set({ isUnifiedSearchLoading: v }),
+
+  setUnifiedResult: (result) => {
+    const state = useAppStore.getState();
+    saveJson(unifiedKey(state.sessionId), { result, followups: state.unifiedFollowups });
+    set({ unifiedResult: result });
+  },
+  addUnifiedFollowup: (msg) => {
+    set((state) => {
+      const updated = [...state.unifiedFollowups, msg];
+      saveJson(unifiedKey(state.sessionId), { result: state.unifiedResult, followups: updated });
+      return { unifiedFollowups: updated };
+    });
+  },
+  updateUnifiedFollowup: (id, updates) =>
+    set((state) => {
+      const updated = state.unifiedFollowups.map((m) => (m.id === id ? { ...m, ...updates } : m));
+      saveJson(unifiedKey(state.sessionId), { result: state.unifiedResult, followups: updated });
+      return { unifiedFollowups: updated };
+    }),
+  clearUnifiedSearch: () => {
+    const state = useAppStore.getState();
+    saveJson(unifiedKey(state.sessionId), null);
+    set({ unifiedResult: null, unifiedFollowups: [] });
+  },
+
+  setTranslationProgress: (msg) => set({ translationProgress: msg }),
+
+  setTranslatedPage: (pdfName, page, html) =>
+    set((state) => ({
+      translatedPages: {
+        ...state.translatedPages,
+        [pdfName]: { ...state.translatedPages[pdfName], [page]: html },
+      },
+    })),
+
+  clearTranslationState: (pdfName) =>
+    set((state) =>
+      pdfName
+        ? { translatedPages: { ...state.translatedPages, [pdfName]: {} }, translationProgress: '' }
+        : { translatedPages: {}, translationProgress: '' }
+    ),
 
   reset: () => {
     localStorage.removeItem(SESSION_KEY);

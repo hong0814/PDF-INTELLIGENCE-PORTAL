@@ -1,6 +1,9 @@
 import { useState, useCallback } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { BASE } from '../api/client';
+import { BASE, apiFetch } from '../api/client';
+import DocumentViewer from './DocumentViewer';
+
+type SubTab = 'images' | 'fund';
 
 interface ImageItem {
   index: number;
@@ -17,6 +20,7 @@ interface ImageItem {
 export default function CreditReviewView() {
   const pdfs = useAppStore((s) => s.pdfs);
   const sessionId = useAppStore((s) => s.sessionId);
+  const [subTab, setSubTab] = useState<SubTab>('images');
 
   const [selectedPdf, setSelectedPdf] = useState<string>('');
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -30,7 +34,7 @@ export default function CreditReviewView() {
     setImages([]);
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${BASE}/documents/images?name=${encodeURIComponent(selectedPdf)}`,
         { headers: { 'X-Session-ID': sessionId } },
       );
@@ -46,7 +50,6 @@ export default function CreditReviewView() {
     }
   }, [selectedPdf, sessionId]);
 
-  // Empty state
   if (pdfs.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-full px-6 fade-in">
@@ -62,8 +65,62 @@ export default function CreditReviewView() {
   }
 
   return (
+    <div className="flex flex-col h-full">
+      {/* Sub-tab bar */}
+      <div className="flex items-center gap-1 px-4 py-2 border-b bg-surface-elevated">
+        <button
+          onClick={() => setSubTab('images')}
+          className={`px-4 py-1.5 text-sm rounded-lg transition-colors ${
+            subTab === 'images' ? 'bg-primary/10 text-primary font-medium' : 'text-text-muted hover:text-text-secondary'
+          }`}
+        >
+          이미지 검색
+        </button>
+        <button
+          onClick={() => setSubTab('fund')}
+          className={`px-4 py-1.5 text-sm rounded-lg transition-colors ${
+            subTab === 'fund' ? 'bg-primary/10 text-primary font-medium' : 'text-text-muted hover:text-text-secondary'
+          }`}
+        >
+          기금 문서 보기
+        </button>
+      </div>
+
+      {/* Sub-tab content */}
+      {subTab === 'images' ? (
+        <ImageView
+          pdfs={pdfs}
+          selectedPdf={selectedPdf}
+          setSelectedPdf={setSelectedPdf}
+          images={images}
+          setImages={setImages}
+          isLoading={isLoading}
+          setIsLoading={setIsLoading}
+          error={error}
+          setError={setError}
+          handleLoadImages={handleLoadImages}
+        />
+      ) : (
+        <DocumentViewer tableFilter="inner" />
+      )}
+    </div>
+  );
+}
+
+function ImageView({ pdfs, selectedPdf, setSelectedPdf, images, isLoading, error, handleLoadImages }: {
+  pdfs: { name: string }[];
+  selectedPdf: string;
+  setSelectedPdf: (v: string) => void;
+  images: ImageItem[];
+  setImages: (v: ImageItem[]) => void;
+  isLoading: boolean;
+  setIsLoading: (v: boolean) => void;
+  error: string | null;
+  setError: (v: string | null) => void;
+  handleLoadImages: () => void;
+}) {
+  return (
     <div className="flex flex-col h-full max-w-full mx-auto">
-      {/* Header + controls */}
       <div className="px-5 py-3 border-b bg-surface-elevated flex items-center justify-between">
         <span className="text-sm font-semibold">기업금융심사 — 문서 이미지 분석</span>
         {images.length > 0 && (
@@ -92,7 +149,6 @@ export default function CreditReviewView() {
         </button>
       </div>
 
-      {/* Loading */}
       {isLoading && (
         <div className="px-6 py-8 flex items-center justify-center gap-3 text-sm text-text-muted">
           <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -100,14 +156,12 @@ export default function CreditReviewView() {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="px-6 py-4 border-t bg-danger/5">
           <p className="text-sm text-error">{error}</p>
         </div>
       )}
 
-      {/* Images grid */}
       {!isLoading && images.length > 0 && (
         <div className="flex-1 overflow-y-auto px-6 py-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -118,7 +172,6 @@ export default function CreditReviewView() {
         </div>
       )}
 
-      {/* Empty after load */}
       {!isLoading && images.length === 0 && selectedPdf && !error && (
         <div className="flex-1 flex flex-col items-center justify-center text-text-muted text-sm">
           <svg className="w-12 h-12 mb-3 text-border" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>

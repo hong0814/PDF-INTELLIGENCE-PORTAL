@@ -22,7 +22,7 @@ const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
   },
   {
     id: 'search',
-    label: '표 검색',
+    label: '문서 검색',
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 14h18m-9-4v8m-7-4h14M4 6h16" />
@@ -30,11 +30,11 @@ const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
     ),
   },
   {
-    id: 'qa',
-    label: '텍스트 검색',
+    id: 'translation',
+    label: 'PDF 번역',
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="m10.5 21 5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 0 1 6-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 0 1-3.827-5.802" />
       </svg>
     ),
   },
@@ -53,7 +53,9 @@ export default function TabBar() {
   const activeTab = useAppStore((s) => s.activeTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const tableQAs = useAppStore((s) => s.tableQAs);
-  const qaMessages = useAppStore((s) => s.qaMessages);
+  const unifiedFollowups = useAppStore((s) => s.unifiedFollowups);
+  const isTranslating = useAppStore((s) => s.isTranslating);
+  const isUnifiedSearchLoading = useAppStore((s) => s.isUnifiedSearchLoading);
   const hasSearchQA = useMemo(() => {
     for (const items of Object.values(tableQAs)) {
       if (items.some(item => !item.answer)) return true;
@@ -61,15 +63,15 @@ export default function TabBar() {
     return false;
   }, [tableQAs]);
 
-  const hasDocQA = useMemo(() => {
-    return qaMessages.some(m => m.isLoading);
-  }, [qaMessages]);
+  const hasUnifiedFollowup = useMemo(() => {
+    return unifiedFollowups.some(m => m.isLoading);
+  }, [unifiedFollowups]);
 
   return (
     <nav className="flex items-center border-b border-border bg-surface-elevated px-4">
       {TABS.map((tab) => {
         const isActive = activeTab === tab.id;
-        const showPending = (tab.id === 'search' && hasSearchQA) || (tab.id === 'qa' && hasDocQA);
+        const showPending = (tab.id === 'search' && (hasSearchQA || hasUnifiedFollowup || isUnifiedSearchLoading)) || (tab.id === 'translation' && isTranslating);
         return (
           <button
             key={tab.id}

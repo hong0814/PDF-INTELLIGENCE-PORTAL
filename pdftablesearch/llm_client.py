@@ -35,8 +35,8 @@ logger = get_logger(__name__)
 # Default configuration
 # ---------------------------------------------------------------------------
 
-_DEFAULT_LLM_ENDPOINT = "https://api.z.ai/api/coding/paas/v4"
-_DEFAULT_LLM_MODEL = "glm-4.7"
+_DEFAULT_LLM_ENDPOINT = "https://ollama.com/v1"
+_DEFAULT_LLM_MODEL = "gpt-oss:120b"
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_MAX_RETRIES = 3
 
@@ -220,20 +220,25 @@ class ZaiLLMClient:
         cache_dir: Optional[str] = None,
         cache_ttl: Optional[int] = None,
     ) -> None:
-        resolved_key = get_api_key(api_key)
-        self.model = model or _DEFAULT_LLM_MODEL
+        settings = get_settings()
+        resolved_key = (
+            api_key
+            or settings.ollama_api_key
+            or get_api_key(None)
+        )
+        self.model = model or settings.zai_llm_model
         self.max_retries = max_retries
 
+        endpoint = llm_endpoint or settings.zai_llm_endpoint or _DEFAULT_LLM_ENDPOINT
+
         self._llm = ChatOpenAI(
-            base_url=llm_endpoint or _DEFAULT_LLM_ENDPOINT,
+            base_url=endpoint,
             api_key=resolved_key,
             model=self.model,
             temperature=0.1,
             request_timeout=timeout,
             max_retries=max_retries,
         )
-
-        settings = get_settings()
         self._cache = LLMCache(
             cache_dir=cache_dir or f"{settings.cache_dir}/llm",
             enabled=cache_enabled if cache_enabled is not None else settings.cache_enabled,
@@ -243,7 +248,7 @@ class ZaiLLMClient:
         logger.info(
             "ZaiLLMClient initialized: model=%s, endpoint=%s, cache=%s",
             self.model,
-            llm_endpoint or _DEFAULT_LLM_ENDPOINT,
+            endpoint,
             self._cache.enabled,
         )
 

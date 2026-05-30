@@ -9,6 +9,11 @@ from pdftablesearch.exceptions import VectorIndexError, VectorSearchError
 from pdftablesearch.vectorstore import TableVectorStore
 
 
+@pytest.fixture(autouse=True)
+def _use_chroma_backend(monkeypatch):
+    monkeypatch.setenv("VECTOR_BACKEND", "chroma")
+
+
 @pytest.fixture
 def mock_embeddings():
     """Create mock ZaiEmbeddings."""

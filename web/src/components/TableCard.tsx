@@ -12,6 +12,12 @@ const TABLE_STYLES = `
   th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; vertical-align: middle; }
   th { background-color: #dbeafe; font-weight: 600; }
   tr:nth-child(even) td { background-color: #f8fafc; }
+
+  td table { width: 100%; border-collapse: collapse; margin: 2px 0; font-size: 11px; background: #fff; border: 1px solid #bfdbfe; border-radius: 4px; overflow: hidden; }
+  td table th { background-color: #eff6ff; font-weight: 600; font-size: 11px; padding: 3px 6px; border: 1px solid #bfdbfe; color: #1e40af; }
+  td table td { padding: 3px 6px; border: 1px solid #e0e7ff; font-size: 11px; background: #fafbff; }
+  td table tr:nth-child(even) td { background: #f0f4ff; }
+
   p { margin: 0; padding: 0; }
 `;
 
@@ -191,6 +197,38 @@ interface TableCardProps {
   sessionId: string;
 }
 
+function htmlTableToMarkdown(html: string): string {
+  return html.replace(/<table[^>]*>/gi, '').replace(/<\/table>/gi, '')
+    .replace(/<tr[^>]*>/gi, '').replace(/<\/tr>/gi, '\n')
+    .replace(/<t[hH][^>]*>/gi, '| ').replace(/<\/t[hH]>/gi, ' ')
+    .replace(/<t[dD][^>]*>/gi, '| ').replace(/<\/t[dD]>/gi, ' ')
+    .replace(/<p[^>]*>/gi, '').replace(/<\/p>/gi, '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+function sanitizeAnswer(answer: string): string {
+  if (/<table[\s>]/i.test(answer)) {
+    const md = htmlTableToMarkdown(answer);
+    const lines = md.split('\n').filter((l: string) => l.trim());
+    if (lines.length > 0) {
+      const firstPipeLine = lines.findIndex((l: string) => l.includes('|'));
+      if (firstPipeLine >= 0) {
+        const header = lines[firstPipeLine];
+        const colCount = (header.match(/\|/g) || []).length - 1;
+        if (colCount > 0) {
+          const sep = '| ' + Array.from({ length: colCount }, () => '---').join(' | ') + ' |';
+          lines.splice(firstPipeLine + 1, 0, sep);
+        }
+      }
+      return lines.join('\n');
+    }
+  }
+  return answer;
+}
+
 export default function TableCard({ table, index, isSmartPick, sessionId }: TableCardProps) {
   const tableQAs = useAppStore((s) => s.tableQAs);
   const addTableQA = useAppStore((s) => s.addTableQA);
@@ -199,6 +237,7 @@ export default function TableCard({ table, index, isSmartPick, sessionId }: Tabl
   const [questionInput, setQuestionInput] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const [showFullTable, setShowFullTable] = useState(false);
+  const [showMerged, setShowMerged] = useState(true);
   const qaEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -219,7 +258,7 @@ export default function TableCard({ table, index, isSmartPick, sessionId }: Tabl
           if (!r.done) continue;
           const idx = qaList.findIndex(item => item.question === r.question && !item.answer);
           if (idx >= 0) {
-            updateTableQA(table.table_id, idx, r.answer);
+            updateTableQA(table.table_id, idx, sanitizeAnswer(r.answer));
           }
         }
       } catch {}
@@ -250,6 +289,7 @@ export default function TableCard({ table, index, isSmartPick, sessionId }: Tabl
         accumulated += token;
         updateTableQA(table.table_id, idx, accumulated);
       });
+      updateTableQA(table.table_id, idx, sanitizeAnswer(accumulated));
     } catch (err) {
       updateTableQA(table.table_id, idx,
         `오류: ${err instanceof Error ? err.message : '답변을 가져올 수 없습니다.'}`
@@ -382,7 +422,7 @@ export default function TableCard({ table, index, isSmartPick, sessionId }: Tabl
       </div>
 
       {table.table_html && (
-        <TableIframe html={table.table_html} expanded={showFullTable} />
+        <TableIframe html={(showMerged && table.merged_table_html) || table.table_html} expanded={showFullTable} />
       )}
 
       {!table.table_html && table.table_markdown && (
@@ -392,6 +432,14 @@ export default function TableCard({ table, index, isSmartPick, sessionId }: Tabl
       )}
 
       <div className="p-3 flex items-center gap-2 border-b border-border-light">
+        {table.merged_table_html && (
+          <button
+            onClick={() => setShowMerged(!showMerged)}
+            className={`px-3 py-1.5 text-xs rounded-md transition-colors border flex items-center gap-1 ${showMerged ? 'text-blue-600 border-blue-300 bg-blue-50' : 'text-text-secondary hover:text-text-primary hover:bg-surface border-border'}`}
+          >
+            {showMerged ? '병합표' : '분할표'}
+          </button>
+        )}
         <button
           onClick={() => setShowFullTable(!showFullTable)}
           className="px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-surface rounded-md transition-colors border border-border"

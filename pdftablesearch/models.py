@@ -47,6 +47,7 @@ class TableSearchResult:
     rerank_score: Optional[float] = None
     table_title: Optional[str] = None
     table_type: Optional[str] = None
+    group_id: Optional[str] = None
 
     # -- Serialization -------------------------------------------------------
 
@@ -67,6 +68,7 @@ class TableSearchResult:
             "rerank_score": self.rerank_score,
             "table_title": self.table_title,
             "table_type": self.table_type,
+            "group_id": self.group_id,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -101,6 +103,7 @@ class TableSearchResult:
             rerank_score=data.get("rerank_score"),
             table_title=data.get("table_title"),
             table_type=data.get("table_type"),
+            group_id=data.get("group_id"),
         )
 
     @classmethod
@@ -144,6 +147,7 @@ class TableSearchResult:
             relevance_score=score,
             table_title=document.metadata.get("table_title"),
             table_type=document.metadata.get("table_type"),
+            group_id=document.metadata.get("group_id"),
         )
 
 

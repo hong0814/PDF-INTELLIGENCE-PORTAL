@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { QAMessage } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { BASE } from '../api/client';
+import { drawPIIMasks } from '../utils/piiDetection';
 
 declare global { var pdfjsLib: any; }
 
@@ -9,7 +10,7 @@ interface Props {
   message: QAMessage;
 }
 
-type PopupSource = { pdf: string; page_number: number; text: string };
+type PopupSource = { pdf: string; page_number: number; paragraph_id?: string; text: string };
 
 function ChunkPopup({ source, onClose }: { source: PopupSource; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -57,7 +58,7 @@ function ChunkPopup({ source, onClose }: { source: PopupSource; onClose: () => v
             text: item.str,
             x: tx[4],
             y: tx[5] - fontSize,
-            w: item.width || (item.str.length * fontSize * 0.6),
+            w: (item.width || item.str.length * fontSize * 0.6) * scale,
             h: fontSize * 1.2,
           });
         }
@@ -156,6 +157,9 @@ function ChunkPopup({ source, onClose }: { source: PopupSource; onClose: () => v
           const s = spans[si];
           ctx.fillRect(s.x, s.y, s.w, s.h);
         }
+
+        drawPIIMasks(canvas, spans);
+
         ctx.lineWidth = 0;
       } catch (e) {
         console.warn('PDF page render failed:', e);

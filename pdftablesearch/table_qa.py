@@ -34,7 +34,9 @@ Rules:
 2. Use specific numbers from the table when possible
 3. If the table doesn't contain enough information, say so clearly
 4. Keep answers concise (2-3 sentences max)
-5. Respond in Korean"""
+5. Respond in Korean
+6. Do NOT include HTML tags in your answer. Use plain text or markdown tables only.
+7. When presenting data, use markdown table format (| col1 | col2 |) instead of HTML."""
 
 _QA_USER_PROMPT = """User Question: {query}
 

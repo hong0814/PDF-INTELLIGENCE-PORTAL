@@ -18,9 +18,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import fitz
 import opendataloader_pdf
 from langchain_core.documents import Document
 
+from pdftablesearch.config import get_settings
 from pdftablesearch.exceptions import PDFProcessingError, TableParsingError
 from pdftablesearch.models import ProcessingResult
 from pdftablesearch.utils import get_logger, validate_pdf_path
@@ -41,9 +43,9 @@ from pdftablesearch.loader.markdown_parser import (
     extract_table_info,
 )
 from pdftablesearch.loader.matcher import (
-    calculate_table_similarity,
     find_best_json_match,
 )
+from pdftablesearch.table_structure_extractor import extract_table_structure
 
 logger = get_logger(__name__)
 
@@ -91,7 +93,8 @@ class PDFProcessor:
             }
             if use_hybrid:
                 convert_params["hybrid"] = "docling-fast"
-                convert_params["hybrid_url"] = "http://localhost:5002"
+                hybrid_port = get_settings().pdf_portal_hybrid_port
+                convert_params["hybrid_url"] = f"http://localhost:{hybrid_port}"
                 try:
                     opendataloader_pdf.convert(**convert_params)
                 except TypeError:
@@ -187,15 +190,22 @@ class PDFProcessor:
         documents: List[Document] = []
         used_json_indices: set = set()
 
-        for idx, (table_html_str, _offset, html_title) in enumerate(html_tables):
+        fitz_doc: Optional[Any] = None
+        try:
+            fitz_doc = fitz.open(str(validated_path))
+        except Exception:
+            logger.warning("Could not open PDF with PyMuPDF for cell-level extraction: %s", validated_path)
+
+        for idx, (table_html_str, _offset, html_title, html_context) in enumerate(html_tables):
             table_title: Optional[str] = html_title
-            table_context: Optional[str] = None
+            table_context: Optional[str] = html_context
             page_estimate = 1
 
             if not table_title and idx < len(table_info_list):
                 info = table_info_list[idx]
                 table_title = info.get("title")
-                table_context = info.get("context")
+                if not table_context:
+                    table_context = info.get("context")
                 page_estimate = info.get("page_estimate", 1)
 
             page_number = page_estimate
@@ -212,17 +222,8 @@ class PDFProcessor:
                 json_id = meta.get("id", best_match_idx)
                 table_id = f"table_{page_number}_{json_id}"
                 used_json_indices.add(best_match_idx)
-            else:
-                if all_metadata:
-                    num_json_tables = len(all_metadata)
-                    closest_idx = min(
-                        (i for i in range(num_json_tables) if i not in used_json_indices),
-                        key=lambda x: abs(x - idx),
-                        default=None,
-                    )
-                    if closest_idx is not None:
-                        page_estimate = all_metadata[closest_idx].get("page_number", page_estimate)
-                page_number = page_estimate
+                # docling/opendataloader-pdf bbox is already in PDF coords (bottom-left, y-up)
+                # no conversion needed
 
             table_md = html_table_to_markdown(table_html_str)
 
@@ -239,12 +240,62 @@ class PDFProcessor:
             if table_context:
                 doc_metadata["table_context"] = table_context
 
-            content = f"{table_title}\n{table_html_str}" if table_title else table_html_str
+            try:
+                fitz_page = fitz_doc[page_number - 1] if fitz_doc and page_number <= len(fitz_doc) else None
+                structure = extract_table_structure(
+                    html=table_html_str,
+                    table_id=table_id,
+                    table_title=table_title or "",
+                    page=fitz_page,
+                )
+                structured_text = structure.to_full_text()
+                if len(structured_text.strip()) > 10:
+                    content = structured_text
+                    doc_metadata["doc_type"] = "full_table"
+                    doc_metadata["table_html"] = table_html_str
 
-            doc = Document(page_content=content, metadata=doc_metadata)
-            documents.append(doc)
+                    doc = Document(page_content=content, metadata=doc_metadata)
+                    documents.append(doc)
 
-        logger.info("Parsed %d tables from HTML for %s", len(documents), document_name)
+                    for ci, field in enumerate(structure.fields):
+                        chunk_text = f"{field.path} : {field.value}"
+                        if not chunk_text.strip():
+                            continue
+                        chunk_meta = dict(doc_metadata)
+                        chunk_meta["doc_type"] = "cell_chunk"
+                        chunk_meta["parent_table_id"] = table_id
+                        chunk_meta["chunk_index"] = ci
+                        chunk_meta["hierarchy_path"] = field.path
+                        chunk_meta["key_field"] = field.key
+                        chunk_meta["depth"] = field.depth
+                        if field.supplementary:
+                            chunk_meta["bounding_box"] = [0, 0, 0, 0]
+                        documents.append(Document(page_content=chunk_text, metadata=chunk_meta))
+                else:
+                    content_parts = []
+                    if table_title:
+                        content_parts.append(table_title)
+                    if table_context:
+                        content_parts.append(table_context)
+                    content_parts.append(table_html_str)
+                    content = "\n".join(content_parts)
+                    doc = Document(page_content=content, metadata=doc_metadata)
+                    documents.append(doc)
+            except Exception:
+                content_parts = []
+                if table_title:
+                    content_parts.append(table_title)
+                if table_context:
+                    content_parts.append(table_context)
+                content_parts.append(table_html_str)
+                content = "\n".join(content_parts)
+                doc = Document(page_content=content, metadata=doc_metadata)
+                documents.append(doc)
+
+        if fitz_doc:
+            fitz_doc.close()
+
+        logger.info("Parsed %d documents from HTML for %s", len(documents), document_name)
 
         self._last_documents = documents
         self._last_output_dir = conv_dir
@@ -254,6 +305,41 @@ class PDFProcessor:
             tables_extracted=len(documents),
             document_name=document_name,
         )
+
+    def convert_standard(self, pdf_path: str, output_dir: Optional[str] = None) -> Optional[Path]:
+        """Run standard (non-hybrid) PDF conversion and return the HTML file path.
+
+        Returns None if conversion fails or no HTML is produced.
+        The output is written to a ``standard/`` subdirectory next to the hybrid output.
+        """
+        validated_path = Path(pdf_path)
+        if output_dir:
+            target = Path(output_dir) / "standard"
+        else:
+            target = self._get_output_dir(validated_path) / "standard"
+        target.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Standard conversion: %s -> %s", validated_path, target)
+        try:
+            params = {
+                "input_path": str(validated_path),
+                "output_dir": str(target),
+                "format": "html",
+            }
+            try:
+                opendataloader_pdf.convert(**params)
+            except TypeError:
+                params.pop("format", None)
+                opendataloader_pdf.convert(input_path=str(validated_path), output_dir=str(target))
+        except Exception as exc:
+            logger.warning("Standard conversion failed: %s", exc)
+            return None
+
+        html_files = list(target.glob("*.html"))
+        if html_files:
+            logger.info("Standard HTML produced: %s", html_files[0])
+            return html_files[0]
+        return None
 
     def get_documents(self) -> List[Document]:
         """Return the LangChain Documents from the most recent load."""
