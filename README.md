@@ -227,9 +227,10 @@ PDF 업로드
 ### 사전 요구사항
 
 - Python 3.11 이상
-- Node.js 18 이상
-- npm 9 이상
-- Ollama API 키 ([ollama.com](https://ollama.com) 가입)
+- `uv` (`brew install uv` 또는 공식 설치 방법)
+- Homebrew OpenLDAP (`brew install openldap`) - 로컬 개발용 LDAP 서버 실행 시 필요
+- Node.js 18 이상 / npm 9 이상 - 웹 프론트 빌드 또는 `npm run dev` 사용 시 필요
+- `.env.example`에 맞는 LLM API 설정값 (예: `ZAI_API_KEY`)
 
 ### 5분 만에 실행하기
 
@@ -238,35 +239,39 @@ PDF 업로드
 git clone https://github.com/hong0814/PDF-INTELLIGENCE-PORTAL.git
 cd PDF-INTELLIGENCE-PORTAL
 
-# 2. Python 가상환경 설정
-python -m venv .venv
-source .venv/bin/activate
+# 2. Python 의존성 설치 (권장)
+uv sync
 
-# 3. Python 패키지 설치
-pip install -e .
+# 참고: 별도 sync 없이도 `uv run <command>`로 필요한 의존성을 해석하며 실행할 수 있습니다.
 
-# 4. 하이브리드 변환 서버 시작 (OCR 지원)
-opendataloader-pdf-hybrid --port 5002 &
+# 3. 환경 변수 파일 생성
+cp .env.example .env
 
-# 5. 환경 변수 설정 (.env 파일)
-cat > .env << 'EOF'
-OLLAMA_API_KEY=your_ollama_api_key_here
-ZAI_LLM_ENDPOINT=https://ollama.com/v1
-ZAI_LLM_MODEL=gpt-oss:120b
-EOF
+# 4. 로컬 개발용 LDAP 서버 준비
+brew install openldap
+uv run ldap
 
-# 6. 프론트엔드 빌드
+# 5. 하이브리드 변환 서버 시작 (OCR 지원)
+uv run opendataloader-pdf-hybrid --port 5002 &
+
+# 6. 프론트엔드 빌드 (FastAPI가 정적 파일 서빙)
 cd web
 npm install
 npm run build
 cd ..
 
-# 7. 서버 실행
-uvicorn pdftablesearch.web_server:app --reload --port 8000
+# 7. 백엔드 실행
+uv run uvicorn pdftablesearch.web_server:app --reload --port 8000
 
 # 8. 브라우저에서 접속
 open http://localhost:8000
 ```
+
+`.env`는 `.env.example`을 복사한 뒤 필요한 값만 수정하면 됩니다. 로컬 LDAP/JWT 개발 기본값은 이미 포함되어 있으므로 보통 `ZAI_API_KEY` 등 현재 사용하는 API 값만 채우면 됩니다.
+
+앱에 접속하면 먼저 LDAP 로그인 화면이 표시되며, 로그인 후 사용자별 세션을 생성해서 작업합니다. 개발용 seeded 계정은 `123456 / 1234`, `admin / admin`입니다.
+
+현재 PDF portal의 LDAP/JWT 인증 흐름에는 Redis가 필요하지 않습니다. 이 LDAP 서버는 로컬 개발 전용이며 `ldap://` plaintext 연결만 사용합니다. TLS는 설정되어 있지 않으므로 운영 환경에서 사용하면 안 되며, seeded 계정/예시 비밀번호/예시 JWT secret도 운영 환경에서 사용하면 안 됩니다. LDAP 서버 종료는 `uv run ldap-stop`으로 할 수 있습니다.
 
 ---
 
@@ -276,16 +281,55 @@ open http://localhost:8000
 
 #### 환경 변수
 
-`.env` 파일을 프로젝트 루트에 생성:
+프로젝트 루트에서 `.env.example`를 복사해 `.env`를 만듭니다:
 
 ```bash
-# Ollama LLM 설정
-OLLAMA_API_KEY=your_ollama_api_key_here
-ZAI_LLM_ENDPOINT=https://ollama.com/v1
-ZAI_LLM_MODEL=gpt-oss:120b
+cp .env.example .env
 ```
 
-> 임베딩은 로컬 `BAAI/bge-m3` 모델을 사용하므로 별도 API 키가 필요하지 않습니다.
+로컬 LDAP/JWT 로그인 기준으로 먼저 확인할 값은 아래와 같습니다.
+
+- `ZAI_API_KEY`: 현재 사용하는 LLM/embedding API 키
+- `LDAP_SERVER_URL=ldap://localhost:3890`
+- `LDAP_USE_TLS=false`
+- `LDAP_BASE_DN=OU=YourCompany,DC=hc,DC=com`
+- `LDAP_SERVICE_BIND_DN=CN=admin,DC=hc,DC=com`
+- `LDAP_SERVICE_BIND_PASSWORD=secret`
+- `AUTH_SECRET_KEY=replace-with-a-strong-random-secret`
+
+`.env.example`에는 로컬 LDAP 개발 기본값과 JWT 쿠키 예시값이 이미 들어 있습니다. 로컬 개발에서는 그대로 써도 되지만, 운영 환경에서는 `AUTH_SECRET_KEY`를 강한 랜덤 값으로 교체하고 `AUTH_COOKIE_SECURE=true`를 사용하세요.
+
+> 임베딩은 로컬 `BAAI/bge-m3` 모델을 사용하므로 임베딩용 별도 API 키가 필요하지 않습니다.
+
+#### 로컬 개발용 LDAP 서버
+
+현재 PDF portal 인증은 LDAP bind + JWT 쿠키만 사용합니다. `analytics_agent`와 달리 이 로컬 LDAP 서버 시작/정지나 현재 인증 흐름에는 Redis가 필요하지 않습니다.
+이 서버는 로컬 개발 전용이며 `ldap://` plaintext 연결만 제공합니다. TLS는 지원하지 않으므로 운영 환경에 사용하면 안 됩니다.
+
+```bash
+# OpenLDAP 도구 설치
+brew install openldap
+
+# 로컬 LDAP 서버 시작
+uv run ldap
+
+# 서버 종료
+uv run ldap-stop
+```
+
+`.env.example`의 LDAP 기본값은 위 로컬 서버 seed 데이터와 맞춰져 있습니다. `LDAP_PORT`나 `LDAP_RUN_DIR`를 바꿔 실행했다면 `.env`의 `LDAP_SERVER_URL`도 함께 맞추세요.
+
+기본 runtime 디렉터리는 포트별로 분리되며 `LDAP_PORT=3891`이면 `/tmp/pdf-intelligence-portal-ldap-3891`을 사용합니다. 필요하면 `LDAP_RUN_DIR`로 명시적으로 덮어쓸 수 있습니다.
+
+기본값은 다음과 같습니다.
+
+- LDAP URL: `ldap://localhost:3890`
+- Root DN: `CN=admin,DC=hc,DC=com`
+- Root password: `secret`
+- Base DN: `OU=YourCompany,DC=hc,DC=com`
+- Seeded users: `123456 / 1234`, `admin / admin`
+
+운영 환경에서는 seeded 계정과 예시 비밀번호를 절대 사용하지 마세요.
 
 #### LLM 모델 변경
 
@@ -294,7 +338,7 @@ Ollama 클라우드에서 제공하는 다양한 모델을 사용할 수 있습�
 ```bash
 # 사용 가능한 모델 목록 확인
 curl -s https://ollama.com/api/tags \
-  -H "Authorization: Bearer $OLLAMA_API_KEY" | python3 -m json.tool
+  -H "Authorization: Bearer $ZAI_API_KEY" | python3 -m json.tool
 ```
 
 | 모델 | 크기 | 특징 |
@@ -312,7 +356,7 @@ OCR 기반의 고품질 PDF 변환을 위해 `docling-fast` 서버를 실행해�
 
 ```bash
 # 서버 시작 (백그라운드)
-opendataloader-pdf-hybrid --port 5002 &
+uv run opendataloader-pdf-hybrid --port 5002 &
 
 # 상태 확인
 curl http://localhost:5002/health
@@ -324,15 +368,17 @@ curl http://localhost:5002/health
 
 ```bash
 # 개발 모드 (자동 리로드)
-uvicorn pdftablesearch.web_server:app --reload --port 8000
+uv run uvicorn pdftablesearch.web_server:app --reload --port 8000
 
 # 프로덕션 모드
-uvicorn pdftablesearch.web_server:app --host 0.0.0.0 --port 8000
+uv run uvicorn pdftablesearch.web_server:app --host 0.0.0.0 --port 8000
 ```
 
-서버가 시작되면 `http://localhost:8000/api/health` 에서 상태를 확인할 수 있습니다.
+서버가 시작되면 `http://localhost:8000/api/health`에서 상태를 확인할 수 있습니다. `web/dist`가 있으면 FastAPI가 `http://localhost:8000/`에서 프론트엔드 정적 파일도 함께 서빙합니다.
 
 ### 2. 프론트엔드 설정
+
+웹 프론트엔드를 수정하거나 새로 빌드할 때만 Node/npm이 필요합니다.
 
 ```bash
 cd web
@@ -350,20 +396,25 @@ npm run build
 npm run preview
 ```
 
-개발 모드(`npm run dev`)는 기본적으로 `http://localhost:5173`에서 실행되며, API 요청을 `localhost:8000`으로 프록시합니다.
+개발 모드(`npm run dev`)는 기본적으로 `http://localhost:5173`에서 실행되며, API 요청을 `localhost:8000`으로 프록시합니다. `npm run build` 결과물은 `web/dist`에 생성되고, 이후 FastAPI가 이를 정적으로 서빙합니다.
 
 ### 3. 전체 실행 (한 번에)
 
 ```bash
-# 터미널 1: 하이브리드 서버
-opendataloader-pdf-hybrid --port 5002
+# 터미널 1: 로컬 개발용 LDAP 서버
+uv run ldap
 
-# 터미널 2: FastAPI 백엔드
-uvicorn pdftablesearch.web_server:app --reload --port 8000
+# 터미널 2: 하이브리드 서버
+uv run opendataloader-pdf-hybrid --port 5002
 
-# 터미널 3: React 개발 서버 (선택)
+# 터미널 3: FastAPI 백엔드
+uv run uvicorn pdftablesearch.web_server:app --reload --port 8000
+
+# 터미널 4: React 개발 서버 (선택)
 cd web && npm run dev
 ```
+
+로컬 로그인 테스트는 `123456 / 1234` 또는 `admin / admin`으로 할 수 있습니다. 이 조합은 개발 전용이며 Redis 없이 동작합니다.
 
 ---
 
@@ -473,12 +524,12 @@ opendataloader-pdf-hybrid --port 5002 &
 ```bash
 # API 연결 테스트
 curl https://ollama.com/v1/chat/completions \
-  -H "Authorization: Bearer $OLLAMA_API_KEY" \
+  -H "Authorization: Bearer $ZAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-oss:120b","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
 ```
 
-- `.env`에서 `OLLAMA_API_KEY`가 올바른지 확인
+- `.env`에서 `ZAI_API_KEY`가 올바른지 확인
 - `ZAI_LLM_MODEL`이 Ollama에서 지원하는 모델명인지 확인
 
 ### 문제: 특정 페이지에서 표가 감지되지 않음

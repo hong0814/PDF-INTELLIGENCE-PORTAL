@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem, UnifiedSearchResponse, UnifiedFollowupMessage } from '../types';
+import type { AuthUser, PdfInfo, TableResult, SmartSearchResponse, QAMessage, TableQAItem, UnifiedSearchResponse, UnifiedFollowupMessage } from '../types';
 
 export type TabId = 'main' | 'document' | 'search' | 'translation' | 'credit';
 
@@ -17,16 +17,24 @@ function tableQaKey(sid: string) { return `pdfts_${sid}_tableqas`; }
 function unifiedKey(sid: string) { return `pdfts_${sid}_unified`; }
 
 function saveJson(key: string, value: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures such as private mode quota limits.
+  }
 }
 function loadJson<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) as T : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 interface AppState {
+  user: AuthUser | null;
+  authLoading: boolean;
   activeTab: TabId;
   sessionId: string;
   sessionName: string;
@@ -58,6 +66,9 @@ interface AppState {
   setTranslationProgress: (msg: string) => void;
   setTranslatedPage: (pdfName: string, page: number, html: string) => void;
   clearTranslationState: (pdfName?: string) => void;
+  setUser: (user: AuthUser | null) => void;
+  setAuthLoading: (loading: boolean) => void;
+  clearAuth: () => void;
   setActiveTab: (tab: TabId) => void;
   setSession: (id: string, name: string) => void;
   setPdfs: (pdfs: PdfInfo[], totalTables: number, totalPages: number) => void;
@@ -100,6 +111,8 @@ function getSessionId(): string {
 const initialSessionId = getSessionId();
 
 export const useAppStore = create<AppState>((set) => ({
+  user: null,
+  authLoading: true,
   activeTab: 'main',
   sessionId: initialSessionId,
   sessionName: '새 세션',
@@ -127,6 +140,39 @@ export const useAppStore = create<AppState>((set) => ({
   isUnifiedSearchLoading: false,
   overlayVersion: 0,
   bumpOverlayVersion: () => set((s) => ({ overlayVersion: s.overlayVersion + 1 })),
+  setUser: (user) => set({ user }),
+  setAuthLoading: (loading) => set({ authLoading: loading }),
+  clearAuth: () => {
+    localStorage.removeItem(SESSION_KEY);
+    set({
+      user: null,
+      authLoading: false,
+      activeTab: 'main',
+      sessionId: '',
+      sessionName: '새 세션',
+      pdfs: [],
+      totalTables: 0,
+      totalPages: 0,
+      selectedPdfs: [],
+      lastSearchQuery: '',
+      results: [],
+      smartResult: null,
+      searchTime: 0,
+      isLoading: false,
+      error: null,
+      qaMessages: [],
+      documentChunksReady: false,
+      isUploading: false,
+      tableQAs: {},
+      highlightRegion: null,
+      isTranslating: false,
+      translationProgress: '',
+      translatedPages: {},
+      unifiedResult: null,
+      unifiedFollowups: [],
+      isUnifiedSearchLoading: false,
+    });
+  },
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 

@@ -15,7 +15,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -74,6 +74,32 @@ class Settings(BaseSettings):
     # -- Logging --------------------------------------------------------------
 
     log_level: str = "INFO"
+
+    # -- Runtime --------------------------------------------------------------
+
+    app_env: str = "dev"
+    cors_allowed_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:8000,http://127.0.0.1:8000"
+    )
+
+    # -- Authentication / LDAP -----------------------------------------------
+
+    ldap_server_url: str = ""
+    ldap_use_tls: bool = False
+    ldap_base_dn: str = ""
+    ldap_service_bind_dn: str = ""
+    ldap_service_bind_password: str = ""
+    ldap_user_filter: str = "(uid={username})"
+    ldap_attr_name: str = "cn"
+    ldap_attr_email: str = "mail"
+    ldap_attr_department: str = "departmentNumber"
+    ldap_attr_role: str = "title"
+    auth_secret_key: str = "dev-secret-change-me"
+    auth_token_expire_hours: int = 8
+    auth_cookie_name: str = "auth_token"
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
     model_config = SettingsConfigDict(
         env_file=".env",

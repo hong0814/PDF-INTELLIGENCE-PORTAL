@@ -9,6 +9,8 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "python-multipart>=0.0.5",
+    "ldap3>=2.9",
+    "pyjwt>=2.8",
     "beautifulsoup4>=4.12.0",
     "pandas>=2.0.0",
     "langchain>=0.1.0",
@@ -37,6 +39,10 @@ dev = [
     "mypy>=1.7.0",
     "ruff>=0.1.0",
 ]
+
+[project.scripts]
+ldap = "pdftablesearch.ldap_server:start"
+ldap-stop = "pdftablesearch.ldap_server:stop"
 
 [build-system]
 requires = ["hatchling"]
