@@ -2,7 +2,12 @@ import { useRef, useCallback, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
 
-export default function SessionHeader() {
+interface SessionHeaderProps {
+  onLogout: () => Promise<void>;
+}
+
+export default function SessionHeader({ onLogout }: SessionHeaderProps) {
+  const user = useAppStore((s) => s.user);
   const sessionName = useAppStore((s) => s.sessionName);
   const pdfs = useAppStore((s) => s.pdfs);
   const totalTables = useAppStore((s) => s.totalTables);
@@ -116,6 +121,19 @@ export default function SessionHeader() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
         </svg>
         PDF 추가
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0 pl-2 border-l border-border">
+        <div className="text-right">
+          <p className="text-xs font-medium text-text-primary">{user?.name || user?.username}</p>
+          <p className="text-[11px] text-text-muted">{user?.department || user?.email || 'LDAP 사용자'}</p>
+        </div>
+        <button
+          className="px-3 py-1.5 rounded-lg border border-border text-xs text-text-secondary hover:text-text-primary hover:bg-surface transition-colors"
+          onClick={() => { void onLogout(); }}
+        >
+          로그아웃
+        </button>
       </div>
     </header>
   );

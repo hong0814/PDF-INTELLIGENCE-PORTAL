@@ -95,6 +95,24 @@ export interface SessionsResponse {
   total: number;
 }
 
+export interface AuthUser {
+  user_id: string;
+  username: string;
+  name: string | null;
+  email: string | null;
+  department: string | null;
+  roles: string[];
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  user: AuthUser;
+}
+
 export interface TableQAItem {
   question: string;
   answer: string;

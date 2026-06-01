@@ -1,0 +1,44 @@
+dn: DC=hc,DC=com
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Your Company
+dc: hc
+
+dn: OU=YourCompany,DC=hc,DC=com
+objectClass: top
+objectClass: organizationalUnit
+ou: YourCompany
+
+dn: OU=Users,OU=YourCompany,DC=hc,DC=com
+objectClass: top
+objectClass: organizationalUnit
+ou: Users
+
+dn: CN=User One,OU=Users,OU=YourCompany,DC=hc,DC=com
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: User One
+sn: One
+displayName: User One
+uid: 123456
+mail: user.one@hc.com
+departmentNumber: 1001
+userPassword: 1234
+title: user
+
+dn: CN=Admin User,OU=Users,OU=YourCompany,DC=hc,DC=com
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: Admin User
+sn: Admin
+displayName: Admin User
+uid: admin
+mail: admin@hc.com
+departmentNumber: admin
+userPassword: admin
+title: admin

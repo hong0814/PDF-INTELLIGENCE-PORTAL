@@ -17,6 +17,7 @@ import tempfile
 import time
 import uuid
 import asyncio
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,13 +26,23 @@ import pandas as pd
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
+from pdftablesearch.auth import (
+    LDAPUser,
+    clear_auth_cookie,
+    get_current_user,
+    issue_auth_token,
+    ldap_client_from_settings,
+    set_auth_cookie,
+    warn_if_insecure_auth_secret,
+)
+from pdftablesearch.config import get_settings
 from pdftablesearch.llm_client import ZaiLLMClient
 from pdftablesearch.pii_masking import mask_pii_in_html, mask_pii_text
 from pdftablesearch.translation import translate_html
@@ -50,6 +61,7 @@ _embeddings: Optional[SentenceTransformerEmbeddings] = None
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _embeddings
+    warn_if_insecure_auth_secret()
     # Clean up stale temp directories from previous runs
     import glob as _glob
     import shutil
@@ -64,10 +76,14 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(title="PDFTableSearch API", version="0.1.0", lifespan=lifespan)
+_settings = get_settings()
+_cors_allowed_origins = [
+    origin.strip() for origin in _settings.cors_allowed_origins.split(",") if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -118,12 +134,72 @@ class UpdateSessionRequest(BaseModel):
     name: str
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@dataclass
+class SessionContext:
+    session_id: str
+    session: dict[str, Any]
+
+
 def _get_session(session_id: Optional[str]) -> dict:
     if not session_id or session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     session = _sessions[session_id]
     session["last_activity"] = datetime.now(timezone.utc).isoformat()
     return session
+
+
+def _require_owned_session(session_id: Optional[str], current_user: LDAPUser) -> SessionContext:
+    if not session_id or session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _sessions[session_id]
+    owner_id = session.get("owner_id")
+    if owner_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this session")
+
+    session["last_activity"] = datetime.now(timezone.utc).isoformat()
+    return SessionContext(session_id=session_id, session=session)
+
+
+def get_session_context(
+    current_user: LDAPUser = Depends(get_current_user),
+    session_id: Optional[str] = Query(default=None),
+    x_session_id: Optional[str] = Header(default=None),
+) -> SessionContext:
+    return _require_owned_session(session_id or x_session_id, current_user)
+
+
+def _cleanup_session_resources(session: dict[str, Any]) -> None:
+    for key in ("upload_dir", "chroma_dir", "doc_chunks_dir"):
+        path = session.get(key)
+        if path:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def _create_session_record(owner_id: str, name: str = "") -> tuple[str, dict[str, Any]]:
+    session_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+    session: Dict[str, Any] = {
+        "owner_id": owner_id,
+        "upload_dir": tempfile.mkdtemp(prefix="pdf_upload_"),
+        "chroma_dir": tempfile.mkdtemp(prefix="pdf_chroma_"),
+        "doc_chunks_dir": tempfile.mkdtemp(prefix="pdf_docchunks_"),
+        "pdfs": {},
+        "searcher": None,
+        "name": name,
+        "created_at": now,
+        "last_activity": now,
+        "total_pages": 0,
+        "search_count": 0,
+        "qa_count": 0,
+    }
+    _sessions[session_id] = session
+    return session_id, session
 
 
 def _serialize_session_brief(session_id: str, session: dict) -> dict:
@@ -1197,12 +1273,39 @@ class ConfirmGroupRequest(BaseModel):
     rejected: list[dict]
 
 
+@app.post("/api/auth/login")
+async def login(body: LoginRequest, response: Response) -> dict[str, Any]:
+    try:
+        client = ldap_client_from_settings()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    user = client.authenticate(body.username, body.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid LDAP credentials")
+
+    token, ttl_seconds = issue_auth_token(user)
+    set_auth_cookie(response, token, ttl_seconds)
+    return {"user": user.model_dump()}
+
+
+@app.post("/api/auth/logout")
+async def logout(response: Response) -> dict[str, bool]:
+    clear_auth_cookie(response)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def auth_me(current_user: LDAPUser = Depends(get_current_user)) -> dict[str, Any]:
+    return {"user": current_user.model_dump()}
+
+
 @app.post("/api/confirm-table-groups")
 async def confirm_table_groups(
     body: ConfirmGroupRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> JSONResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     pdf_name = body.pdf_name
     if pdf_name not in session.get("pdfs", {}):
         raise HTTPException(status_code=404, detail=f"PDF '{pdf_name}' not found")
@@ -1246,34 +1349,24 @@ async def confirm_table_groups(
 
 
 @app.get("/api/sessions")
-async def list_sessions() -> JSONResponse:
+async def list_sessions(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
     sessions = [
-        _serialize_session_brief(sid, s) for sid, s in _sessions.items()
+        _serialize_session_brief(sid, s)
+        for sid, s in _sessions.items()
+        if s.get("owner_id") == current_user.user_id
     ]
     return JSONResponse(content={"sessions": sessions, "total": len(sessions)})
 
 
 @app.post("/api/sessions")
-async def create_session(body: CreateSessionRequest) -> JSONResponse:
-    session_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).isoformat()
-    upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
-    chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
-
-    session: Dict[str, Any] = {
-        "upload_dir": upload_dir,
-        "chroma_dir": chroma_dir,
-        "pdfs": {},
-        "searcher": None,
-        "name": body.name or "",
-        "created_at": now,
-        "last_activity": now,
-        "total_pages": 0,
-        "search_count": 0,
-        "qa_count": 0,
-    }
-    _sessions[session_id] = session
-
+async def create_session(
+    body: CreateSessionRequest,
+    current_user: LDAPUser = Depends(get_current_user),
+) -> JSONResponse:
+    session_id, session = _create_session_record(
+        owner_id=current_user.user_id,
+        name=body.name or "",
+    )
     return JSONResponse(
         content={"session_id": session_id, "name": session["name"]},
         status_code=201,
@@ -1281,46 +1374,45 @@ async def create_session(body: CreateSessionRequest) -> JSONResponse:
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_session(session_id: str) -> JSONResponse:
-    if session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    session = _sessions[session_id]
-    return JSONResponse(content=_serialize_session_brief(session_id, session))
+async def get_session(
+    session_id: str,
+    current_user: LDAPUser = Depends(get_current_user),
+) -> JSONResponse:
+    session_ctx = _require_owned_session(session_id, current_user)
+    return JSONResponse(content=_serialize_session_brief(session_id, session_ctx.session))
 
 
 @app.put("/api/sessions/{session_id}")
-async def update_session(session_id: str, body: UpdateSessionRequest) -> JSONResponse:
-    if session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    session = _sessions[session_id]
+async def update_session(
+    session_id: str,
+    body: UpdateSessionRequest,
+    current_user: LDAPUser = Depends(get_current_user),
+) -> JSONResponse:
+    session_ctx = _require_owned_session(session_id, current_user)
+    session = session_ctx.session
     session["name"] = body.name
     session["last_activity"] = datetime.now(timezone.utc).isoformat()
     return JSONResponse(content=_serialize_session_brief(session_id, session))
 
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str) -> JSONResponse:
-    if session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def delete_session(
+    session_id: str,
+    current_user: LDAPUser = Depends(get_current_user),
+) -> JSONResponse:
+    session_ctx = _require_owned_session(session_id, current_user)
     session = _sessions.pop(session_id)
-    upload_dir = session.get("upload_dir")
-    chroma_dir = session.get("chroma_dir")
-    if upload_dir:
-        shutil.rmtree(upload_dir, ignore_errors=True)
-    if chroma_dir:
-        shutil.rmtree(chroma_dir, ignore_errors=True)
+    _cleanup_session_resources(session_ctx.session)
     return JSONResponse(content={"deleted": session_id})
 
 
 @app.get("/api/documents/pdf")
 async def get_document_pdf(
     name: str,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ):
     from starlette.responses import FileResponse
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
     pdf_path = session["pdfs"][name].get("path")
@@ -1334,15 +1426,13 @@ async def get_page_image(
     name: str,
     page: int = 1,
     dpi: int = 150,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ):
     """Render a specific PDF page as a PNG image using PyMuPDF."""
     from starlette.responses import Response
     import fitz
 
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found")
     pdf_path = session["pdfs"][name].get("path")
@@ -1369,13 +1459,11 @@ async def get_page_image(
 @app.get("/api/documents/text")
 async def get_document_text(
     name: str,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ):
     import re
     from starlette.responses import Response
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
     html_path = session["pdfs"][name].get("html_path")
@@ -1395,12 +1483,10 @@ async def get_document_text(
 @app.get("/api/documents/markdown")
 async def get_document_markdown(
     name: str,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ):
     from starlette.responses import Response
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
     md_path = session["pdfs"][name].get("md_path")
@@ -1417,11 +1503,9 @@ async def get_document_markdown(
 @app.get("/api/documents/tables")
 async def get_document_tables(
     name: str,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ):
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
     tables = session["pdfs"][name].get("tables", [])
@@ -1445,11 +1529,9 @@ async def get_document_tables(
 @app.get("/api/documents/html")
 async def get_document_html(
     name: str,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> HTMLResponse:
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
 
@@ -1473,11 +1555,9 @@ async def get_document_html(
 async def get_page_html(
     name: str,
     page: int = 1,
-    session_id: Optional[str] = None,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> HTMLResponse:
-    sid = session_id or x_session_id
-    session = _get_session(sid)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
 
@@ -1500,7 +1580,7 @@ async def get_page_html(
 @app.get("/api/documents/images")
 async def get_document_images(
     name: str,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> JSONResponse:
     """Extract images from PDF's HTML with surrounding context text.
 
@@ -1508,7 +1588,7 @@ async def get_document_images(
     then parses the HTML to find all ``<img>`` tags with their alt text,
     preceding/following text context, and page number.
     """
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found in session")
 
@@ -1753,32 +1833,21 @@ async def get_document_images(
 async def upload_pdfs(
     files: List[UploadFile] = File(...),
     x_session_id: Optional[str] = Header(None),
+    current_user: LDAPUser = Depends(get_current_user),
 ) -> JSONResponse:
-    session_id = x_session_id or uuid.uuid4().hex
+    session_id: str
+    session: Dict[str, Any]
     now = datetime.now(timezone.utc).isoformat()
 
-    if session_id in _sessions:
-        session = _sessions[session_id]
-        upload_dir = session["upload_dir"]
-        chroma_dir = session["chroma_dir"]
+    if x_session_id:
+        session_ctx = _require_owned_session(x_session_id, current_user)
+        session_id = session_ctx.session_id
+        session = session_ctx.session
     else:
-        upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
-        chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
-        doc_chunks_dir = tempfile.mkdtemp(prefix="pdf_docchunks_")
-        session: Dict[str, Any] = {
-            "upload_dir": upload_dir,
-            "chroma_dir": chroma_dir,
-            "doc_chunks_dir": doc_chunks_dir,
-            "pdfs": {},
-            "searcher": None,
-            "name": "",
-            "created_at": now,
-            "last_activity": now,
-            "total_pages": 0,
-            "search_count": 0,
-            "qa_count": 0,
-        }
-        _sessions[session_id] = session
+        session_id, session = _create_session_record(owner_id=current_user.user_id)
+
+    upload_dir = session["upload_dir"]
+    chroma_dir = session["chroma_dir"]
 
     session_has_existing_pdfs = len(session.get("pdfs", {})) > 0
 
@@ -1877,6 +1946,7 @@ async def upload_pdfs(
 
         session["pdfs"][filename] = {
             "path": str(dest),
+            "upload_dir": upload_dir,
             "table_count": table_count,
             "html_path": html_path,
             "md_path": md_path,
@@ -1938,8 +2008,8 @@ async def upload_pdfs(
 
 
 @app.get("/api/pdfs")
-async def list_pdfs(x_session_id: Optional[str] = Header(None)) -> JSONResponse:
-    session = _get_session(x_session_id)
+async def list_pdfs(session_ctx: SessionContext = Depends(get_session_context)) -> JSONResponse:
+    session = session_ctx.session
 
     pdfs = [
         {"name": name, "table_count": info["table_count"], "page_count": info.get("page_count", 0)}
@@ -1954,9 +2024,9 @@ async def list_pdfs(x_session_id: Optional[str] = Header(None)) -> JSONResponse:
 @app.delete("/api/pdfs/{filename}")
 async def delete_pdf(
     filename: str,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> JSONResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
 
     if filename not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{filename}' not found in session")
@@ -1978,9 +2048,9 @@ async def delete_pdf(
 @app.post("/api/search")
 async def search(
     body: SearchRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> JSONResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     session["search_count"] = session.get("search_count", 0) + 1
     start = time.time()
 
@@ -2021,9 +2091,9 @@ async def search(
 @app.post("/api/smart-search")
 async def smart_search_endpoint(
     body: SmartSearchRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     session["search_count"] = session.get("search_count", 0) + 1
 
     pdf_name = body.pdf_name
@@ -2133,15 +2203,14 @@ async def smart_search_endpoint(
 @app.post("/api/qa")
 async def qa(
     body: QARequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     session["qa_count"] = session.get("qa_count", 0) + 1
 
     import hashlib
     table_id_key = body.table_title or hashlib.md5(body.table_html[:200].encode()).hexdigest()
     qa_key = hashlib.md5(f"{table_id_key}:{body.question}".encode()).hexdigest()
-    sid = x_session_id
 
     if "qa_results" not in session:
         session["qa_results"] = {}
@@ -2269,9 +2338,9 @@ async def qa(
 
 @app.get("/api/qa-results")
 async def get_qa_results(
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> JSONResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     results = []
     for qa_key, qa_data in session.get("qa_results", {}).items():
         results.append({
@@ -2291,9 +2360,9 @@ async def health() -> JSONResponse:
 @app.post("/api/table-transpose/{table_id}")
 async def table_transpose(
     table_id: str,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> JSONResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     html = _find_table_html(session, table_id)
     transposed_html = _transpose_table_html(html)
     return JSONResponse(content={"html": transposed_html})
@@ -2302,9 +2371,9 @@ async def table_transpose(
 @app.post("/api/table-calculate")
 async def table_calculate(
     body: CalculateRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     table_html = _find_table_html(session, body.table_id)
 
     try:
@@ -2373,20 +2442,21 @@ class AskDocumentRequest(BaseModel):
 @app.post("/api/ask-document")
 async def ask_document(
     body: AskDocumentRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
+    session_id = session_ctx.session_id
     session["qa_count"] = session.get("qa_count", 0) + 1
 
     if not session.get("document_chunks_ready"):
-        _chunk_and_index_session(x_session_id)
+        _chunk_and_index_session(session_id)
 
     embeddings = _get_embeddings()
 
     vector_store = TableVectorStore(
         embeddings=embeddings,
         persist_dir=session["doc_chunks_dir"],
-        collection_name=f"doc_chunks_{x_session_id}",
+        collection_name=f"doc_chunks_{session_id}",
     )
 
     query = body.question
@@ -2535,9 +2605,9 @@ class TranslateRequest(BaseModel):
 @app.post("/api/translate-html")
 async def translate_html_pages(
     body: TranslateRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     if body.pdf_name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{body.pdf_name}' not found")
 
@@ -2610,9 +2680,9 @@ async def translate_html_pages(
 async def get_translated_page(
     name: str,
     page: int = 1,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> HTMLResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     if name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{name}' not found")
 
@@ -2629,7 +2699,7 @@ async def get_translated_page(
 @app.post("/api/translate")
 async def translate_document(
     body: TranslateRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
     """Translate PDF text to target language, streaming each chunk via SSE.
 
@@ -2638,7 +2708,7 @@ async def translate_document(
         ``done``       — ``{"total_chunks", "full_text"}`
         ``error``      — ``{"error"}`
     """
-    session = _get_session(x_session_id)
+    session = session_ctx.session
     if body.pdf_name not in session["pdfs"]:
         raise HTTPException(status_code=404, detail=f"PDF '{body.pdf_name}' not found")
 
@@ -2711,13 +2781,19 @@ async def translate_document(
 
 
 @app.get("/api/translate/status/{job_id}")
-async def translate_status(job_id: str) -> JSONResponse:
+async def translate_status(
+    job_id: str,
+    current_user: LDAPUser = Depends(get_current_user),
+) -> JSONResponse:
     # Kept for backward compatibility — returns a stub response.
     return JSONResponse(content={"status": "deprecated"})
 
 
 @app.get("/api/translate/result/{job_id}")
-async def translate_html_file(job_id: str) -> JSONResponse:
+async def translate_html_file(
+    job_id: str,
+    current_user: LDAPUser = Depends(get_current_user),
+) -> JSONResponse:
     # Kept for backward compatibility — returns a stub response.
     return JSONResponse(content={"status": "deprecated"})
 
@@ -2730,13 +2806,14 @@ async def translate_html_file(job_id: str) -> JSONResponse:
 @app.post("/api/unified-search")
 async def unified_search_endpoint(
     body: UnifiedSearchRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
+    session_id = session_ctx.session_id
 
     # Ensure text chunks are indexed
     if not session.get("document_chunks_ready"):
-        _chunk_and_index_session(x_session_id or "")
+        _chunk_and_index_session(session_id)
 
     embeddings = _get_embeddings()
     queue: list[str] = []
@@ -2763,7 +2840,7 @@ async def unified_search_endpoint(
             doc_store = TableVectorStore(
                 embeddings=embeddings,
                 persist_dir=session["doc_chunks_dir"],
-                collection_name=f"doc_chunks_{x_session_id}",
+                collection_name=f"doc_chunks_{session_id}",
             )
             doc_vector_results = doc_store.similarity_search(query=body.query, k=8)
 
@@ -3059,9 +3136,9 @@ async def unified_search_endpoint(
 @app.post("/api/unified-followup")
 async def unified_followup_endpoint(
     body: UnifiedFollowupRequest,
-    x_session_id: Optional[str] = Header(None),
+    session_ctx: SessionContext = Depends(get_session_context),
 ) -> StreamingResponse:
-    session = _get_session(x_session_id)
+    session = session_ctx.session
 
     # Parse previous sources
     try:
