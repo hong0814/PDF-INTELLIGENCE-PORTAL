@@ -11,19 +11,21 @@ export default function LoginView({ error, isSubmitting, onSubmit }: LoginViewPr
   const [password, setPassword] = useState('');
 
   return (
-    <div className="min-h-screen bg-surface flex items-center justify-center px-6">
-      <div className="w-full max-w-md bg-surface-elevated border border-border rounded-2xl shadow-xl shadow-black/5 p-8">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-11 h-11 rounded-2xl bg-primary text-white flex items-center justify-center">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 0h10.5A2.25 2.25 0 0119.5 12.75v6A2.25 2.25 0 0117.25 21h-10.5A2.25 2.25 0 014.5 18.75v-6A2.25 2.25 0 016.75 10.5z" />
-            </svg>
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold text-text-primary">LDAP 로그인</h1>
-            <p className="text-sm text-text-muted">사내 계정으로 PDF Intelligence Portal에 접속합니다.</p>
+    <div className="flex min-h-screen items-center justify-center bg-[#161b22] px-6 py-8">
+      <div className="w-full max-w-[400px] rounded-2xl border border-[#303741] bg-[#212831] px-8 py-9 shadow-[0_4px_24px_rgba(0,0,0,0.35)]">
+        <div className="flex flex-col items-center gap-3">
+          <img
+            alt="분석 Agent 로고"
+            className="h-12 w-auto object-contain"
+            src="/logo.png"
+          />
+          <div className="space-y-1 text-center">
+            <h1 className="text-[1.2rem] font-semibold text-[#f0f6fc]">분석 Agent</h1>
+            <p className="text-sm text-[#9da7b3]">PDF Intelligence Portal</p>
           </div>
         </div>
+
+        <div className="my-5 h-px bg-[#303741]" />
 
         <form
           className="space-y-4"
@@ -32,43 +34,44 @@ export default function LoginView({ error, isSubmitting, onSubmit }: LoginViewPr
             await onSubmit(username, password);
           }}
         >
-          <label className="block">
-            <span className="block text-sm font-medium text-text-secondary mb-1.5">아이디</span>
+          <label className="block space-y-1.5">
+            <span className="block text-[0.78rem] font-medium tracking-[0.02em] text-[#9da7b3]">ID</span>
             <input
               autoComplete="username"
-              className="w-full rounded-xl border border-border bg-surface px-3.5 py-3 text-sm text-text-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              className="w-full rounded-[10px] border border-[#303741] bg-[#212831] px-[14px] py-[10px] text-sm text-[#f0f6fc] outline-none transition-[border-color,box-shadow] placeholder:text-[#7d8590] focus:border-[#2f81f7] focus:ring-[3px] focus:ring-[rgba(47,129,247,0.2)] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isSubmitting}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="사번 또는 LDAP 아이디"
+              placeholder="Enter your ID"
+              spellCheck={false}
               value={username}
             />
           </label>
 
-          <label className="block">
-            <span className="block text-sm font-medium text-text-secondary mb-1.5">비밀번호</span>
+          <label className="block space-y-1.5">
+            <span className="block text-[0.78rem] font-medium tracking-[0.02em] text-[#9da7b3]">Password</span>
             <input
               autoComplete="current-password"
-              className="w-full rounded-xl border border-border bg-surface px-3.5 py-3 text-sm text-text-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              className="w-full rounded-[10px] border border-[#303741] bg-[#212831] px-[14px] py-[10px] text-sm text-[#f0f6fc] outline-none transition-[border-color,box-shadow] placeholder:text-[#7d8590] focus:border-[#2f81f7] focus:ring-[3px] focus:ring-[rgba(47,129,247,0.2)] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isSubmitting}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="비밀번호"
+              placeholder="Enter your password"
               type="password"
               value={password}
             />
           </label>
 
           {error && (
-            <div className="rounded-xl border border-danger/20 bg-danger/5 px-3.5 py-3 text-sm text-danger">
+            <div className="min-h-[1.1em] text-sm text-[#ff7b72]">
               {error}
             </div>
           )}
 
           <button
-            className="w-full rounded-xl bg-primary text-white py-3 text-sm font-medium hover:bg-primary-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="w-full rounded-lg bg-[#2f81f7] px-5 py-[11px] text-sm font-semibold tracking-[0.01em] text-white transition-colors hover:bg-[#1f6feb] disabled:cursor-not-allowed disabled:bg-[#4b5563]"
             disabled={isSubmitting || !username.trim() || !password}
             type="submit"
           >
-            {isSubmitting ? '로그인 중...' : '로그인'}
+            {isSubmitting ? 'Logging in...' : 'Log in'}
           </button>
         </form>
       </div>
