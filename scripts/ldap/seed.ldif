@@ -1,0 +1,39 @@
+dn: dc=pdfportal,dc=local
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: PDF Intelligence Portal
+dc: pdfportal
+
+dn: ou=Users,dc=pdfportal,dc=local
+objectClass: top
+objectClass: organizationalUnit
+ou: Users
+
+dn: cn=User One,ou=Users,dc=pdfportal,dc=local
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: User One
+sn: One
+displayName: User One
+uid: 123456
+mail: user.one@pdfportal.local
+departmentNumber: 1001
+userPassword: 1234
+title: user
+
+dn: cn=Admin User,ou=Users,dc=pdfportal,dc=local
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: Admin User
+sn: Admin
+displayName: Admin User
+uid: admin
+mail: admin@pdfportal.local
+departmentNumber: admin
+userPassword: admin
+title: admin
