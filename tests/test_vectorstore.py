@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 from langchain_core.documents import Document
 
 from pdftablesearch.exceptions import VectorIndexError, VectorSearchError
-from pdftablesearch.vectorstore import TableVectorStore
+from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
 
 @pytest.fixture

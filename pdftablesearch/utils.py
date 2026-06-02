@@ -1,8 +1,6 @@
-"""
-Utility functions for PDFTableSearch library.
+"""PDFTableSearch 공통 유틸리티.
 
-Provides logging configuration, environment variable loading,
-file validation, path sanitization, and other shared helpers.
+로깅 설정, 환경변수 로드, 파일 검증, 경로 정리, 텍스트 헬퍼 등을 제공한다.
 """
 
 import logging
@@ -13,31 +11,29 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file if present
 load_dotenv()
 
 
 # ---------------------------------------------------------------------------
-# Logging
+# 로깅
 # ---------------------------------------------------------------------------
 
 def get_logger(name: str, level: str | None = None) -> logging.Logger:
-    """Create a configured logger for the library.
+    """라이브러리용 설정된 로거를 생성한다.
 
-    Args:
-        name: Logger name (typically ``__name__`` of the calling module).
-        level: Logging level string (e.g. ``"DEBUG"``, ``"INFO"``).
-            Falls back to the ``LOG_LEVEL`` environment variable or ``"INFO"``.
+    매개변수:
+        name: 로거 이름 (보통 호출 모듈의 ``__name__``).
+        level: 로깅 레벨 문자열 (예: ``"DEBUG"``, ``"INFO"``).
+            미지정 시 ``LOG_LEVEL`` 환경변수 또는 ``"INFO"`` 사용.
 
-    Returns:
-        Configured :class:`logging.Logger` instance.
+    반환:
+        설정된 :class:`logging.Logger` 인스턴스.
     """
     logger = logging.getLogger(name)
 
     effective_level = level or os.getenv("LOG_LEVEL", "INFO").upper()
     logger.setLevel(getattr(logging, effective_level, logging.INFO))
 
-    # Add a stream handler only if none exists to avoid duplicate logs
     if not logger.handlers:
         handler = logging.StreamHandler()
         formatter = logging.Formatter(
@@ -51,23 +47,23 @@ def get_logger(name: str, level: str | None = None) -> logging.Logger:
 
 
 # ---------------------------------------------------------------------------
-# Environment helpers
+# 환경변수 헬퍼
 # ---------------------------------------------------------------------------
 
 def get_env(key: str, default: Any = None, required: bool = False) -> Any:
-    """Retrieve an environment variable with optional validation.
+    """환경변수를 조회한다.
 
-    Args:
-        key: Environment variable name.
-        default: Default value when the variable is not set.
-        required: If ``True``, raises :class:`ValueError`` when the
-            variable is missing and no default is provided.
+    매개변수:
+        key: 환경변수 이름.
+        default: 변수가 설정되지 않았을 때의 기본값.
+        required: ``True``이면 변수가 누락되고 기본값도 없을 때
+            :class:`ValueError` 발생.
 
-    Returns:
-        The environment variable value, or *default*.
+    반환:
+        환경변수 값 또는 *default*.
 
-    Raises:
-        ValueError: When *required* is ``True`` and the variable is absent.
+    예외:
+        ValueError: *required*가 ``True``이고 변수가 없을 때.
     """
     value = os.getenv(key, default)
     if required and value is None:
@@ -79,16 +75,16 @@ def get_env(key: str, default: Any = None, required: bool = False) -> Any:
 
 
 def get_api_key(provided_key: str | None = None) -> str:
-    """Resolve the z.ai API key from explicit value or environment.
+    """명시적 값 또는 환경변수에서 z.ai API 키를 해석한다.
 
-    Args:
-        provided_key: Explicitly provided API key. Takes precedence.
+    매개변수:
+        provided_key: 명시적으로 제공된 API 키. 우선순위가 높다.
 
-    Returns:
-        The resolved API key string.
+    반환:
+        해석된 API 키 문자열.
 
-    Raises:
-        ValueError: When no API key can be found.
+    예외:
+        ValueError: API 키를 찾을 수 없을 때.
     """
     key = provided_key or os.getenv("ZAI_API_KEY")
     if not key:
@@ -100,40 +96,36 @@ def get_api_key(provided_key: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# File validation
+# 파일 검증
 # ---------------------------------------------------------------------------
 
-# Allowed maximum file size in bytes (default 100 MB)
 _DEFAULT_MAX_FILE_SIZE_MB = 100
 
 
 def validate_pdf_path(pdf_path: str, max_size_mb: int | None = None) -> Path:
-    """Validate that a PDF file exists, is readable, and within size limits.
+    """PDF 파일이 존재하고 읽기 가능하며 크기 제한 내인지 검증한다.
 
-    Args:
-        pdf_path: Path to the PDF file.
-        max_size_mb: Maximum allowed file size in megabytes.
-            Defaults to the ``MAX_FILE_SIZE_MB`` environment variable or 100.
+    매개변수:
+        pdf_path: PDF 파일 경로.
+        max_size_mb: 최대 허용 파일 크기(MB).
+            미지정 시 ``MAX_FILE_SIZE_MB`` 환경변수 또는 100.
 
-    Returns:
-        Resolved :class:`Path` object for the PDF file.
+    반환:
+        해석된 :class:`Path` 객체.
 
-    Raises:
-        FileNotFoundError: When the file does not exist.
-        ValueError: When the file is not a PDF or exceeds the size limit.
-        PermissionError: When the file is not readable.
+    예외:
+        FileNotFoundError: 파일이 존재하지 않을 때.
+        ValueError: PDF가 아니거나 크기 제한 초과 시.
+        PermissionError: 파일을 읽을 수 없을 때.
     """
     path = Path(pdf_path).resolve()
 
     if not path.exists():
         raise FileNotFoundError(f"PDF file not found: {path}")
-
     if not path.is_file():
         raise ValueError(f"Path is not a file: {path}")
-
     if path.suffix.lower() != ".pdf":
         raise ValueError(f"File is not a PDF: {path}")
-
     if not os.access(path, os.R_OK):
         raise PermissionError(f"PDF file is not readable: {path}")
 
@@ -149,22 +141,19 @@ def validate_pdf_path(pdf_path: str, max_size_mb: int | None = None) -> Path:
 
 
 def sanitize_path(path_str: str) -> Path:
-    """Sanitize a file path to prevent directory traversal attacks.
+    """디렉토리 순회 공격을 방지하기 위해 파일 경로를 정리한다.
 
-    Removes ``..`` segments and resolves the path relative to the current
-    working directory.
+    ``..`` 세그먼트를 제거하고 현재 작업 디렉토리에 대해 상대 경로를 해석한다.
 
-    Args:
-        path_str: Raw path string to sanitize.
+    매개변수:
+        path_str: 정리할 원시 경로 문자열.
 
-    Returns:
-        Sanitized :class:`Path` object.
+    반환:
+        정리된 :class:`Path` 객체.
     """
-    # Remove any null bytes and normalize
     cleaned = path_str.replace("\x00", "")
     resolved = Path(cleaned).resolve()
 
-    # Verify no directory traversal outside of expected scope
     if ".." in Path(cleaned).parts:
         raise ValueError(f"Path contains directory traversal: {path_str}")
 
@@ -172,15 +161,15 @@ def sanitize_path(path_str: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Retry configuration
+# 재시도 설정
 # ---------------------------------------------------------------------------
 
 def get_retry_config() -> dict[str, Any]:
-    """Return retry configuration from environment or defaults.
+    """환경변수 또는 기본값에서 재시도 설정을 반환한다.
 
-    Returns:
-        Dictionary with keys ``max_retries``, ``base_delay``, ``max_delay``,
-        and ``exponential_base`` suitable for use with :mod:`tenacity`.
+    반환:
+        ``max_retries``, ``base_delay``, ``max_delay``, ``exponential_base`` 키를
+        가진 딕셔너리. :mod:`tenacity`와 함께 사용.
     """
     return {
         "max_retries": int(os.getenv("RETRY_MAX_ATTEMPTS", "3")),
@@ -191,51 +180,39 @@ def get_retry_config() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Text helpers
+# 텍스트 헬퍼
 # ---------------------------------------------------------------------------
 
 def truncate_text(text: str, max_length: int = 500, suffix: str = "...") -> str:
-    """Truncate text to a maximum length with a suffix indicator.
-
-    Args:
-        text: Input text to potentially truncate.
-        max_length: Maximum number of characters to retain.
-        suffix: String to append when truncation occurs.
-
-    Returns:
-        Truncated or original text.
-    """
+    """텍스트를 최대 길이로 자른다. 초과 시 suffix를 붙인다."""
     if len(text) <= max_length:
         return text
     return text[: max_length - len(suffix)] + suffix
 
 
 def extract_table_context(markdown_content: str, max_rows: int = 3) -> str:
-    """Extract a concise context string from a markdown table for embedding.
+    """마크다운 표에서 임베딩용 컨텍스트 문자열을 추출한다.
 
-    Includes the header row and up to *max_rows* data rows, which balances
-    embedding quality with token budget constraints.
+    헤더 행과 최대 *max_rows*개의 데이터 행을 포함하여
+    임베딩 품질과 토큰 예산의 균형을 맞춘다.
 
-    Args:
-        markdown_content: Full markdown table string.
-        max_rows: Maximum number of data rows to include.
+    매개변수:
+        markdown_content: 전체 마크다운 표 문자열.
+        max_rows: 포함할 최대 데이터 행 수.
 
-    Returns:
-        Condensed table context suitable for embedding.
+    반환:
+        임베딩에 적합한 압축된 표 컨텍스트.
     """
     lines = markdown_content.strip().split("\n")
     if not lines:
         return ""
 
-    # Always include header row (first line)
     context_lines = [lines[0]]
 
-    # Skip separator row (second line if it looks like |---|---|)
     data_start = 1
     if len(lines) > 1 and re.match(r"^\|[\s\-:|]+\|$", lines[1].strip()):
         data_start = 2
 
-    # Include up to max_rows data rows
     for line in lines[data_start : data_start + max_rows]:
         stripped = line.strip()
         if stripped and stripped.startswith("|"):

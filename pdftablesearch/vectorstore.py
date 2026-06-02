@@ -1,9 +1,7 @@
-"""
-ChromaDB vector store management for PDFTableSearch.
+"""PDFTableSearch ChromaDB 벡터 저장소 관리.
 
-Provides ``TableVectorStore``, a high-level wrapper around LangChain's
-Chroma integration that handles collection creation, document insertion,
-similarity search, and persistence.
+``TableVectorStore`` — LangChain Chroma 통합 래퍼로
+컬렉션 생성, 문서 삽입, 유사도 검색, 영속화를 처리한다.
 """
 
 from __future__ import annotations
@@ -41,35 +39,11 @@ _store_cache: Dict[str, "TableVectorStore"] = {}
 
 
 class TableVectorStore:
-    """Manages a ChromaDB vector store for table documents.
-
-    Wraps LangChain's :class:`Chroma` vector store with convenience
-    methods for adding table documents, performing similarity searches,
-    and managing persistence.
-
-    The vector store is identified by a collection name and a persist
-    directory. Multiple ``TableVectorStore`` instances can coexist with
-    different collection names.
-
-    Args:
-        embeddings: Embeddings instance to use. If ``None``, a default
-            :class:`ZaiEmbeddings` is created.
-        persist_dir: Directory for ChromaDB persistence.
-        collection_name: ChromaDB collection name.
-
-    Example::
-
-        from pdftablesearch.vectorstore import TableVectorStore
-        from pdftablesearch.embeddings import ZaiEmbeddings
-
-        embeddings = ZaiEmbeddings(api_key="your-key")
-        store = TableVectorStore(embeddings=embeddings)
-
-        # Add documents
-        store.add_documents(documents)
-
-        # Search
-        results = store.similarity_search("financial summary", k=5)
+    """
+    표 문서용 ChromaDB 벡터 저장소 관리.
+    
+    LangChain Chroma 통합 래퍼로 컬렉션 생성, 문서 삽입,
+    유사도 검색, 영속화를 처리한다.
     """
 
     def __init__(
@@ -96,9 +70,10 @@ class TableVectorStore:
         persist_dir: Optional[str] = None,
         collection_name: Optional[str] = None,
     ) -> "TableVectorStore":
-        """Return a cached ``TableVectorStore`` for the given *persist_dir*.
-
-        Avoids creating duplicate Chroma connections for the same directory.
+        """
+        주어진 *persist_dir*에 대해 캐시된 ``TableVectorStore``를 반환한다.
+        
+        중복 생성을 방지한다.
         """
         key = persist_dir or os.getenv("CHROMA_PERSIST_DIR", _DEFAULT_PERSIST_DIR)
         if key not in _store_cache:
@@ -113,18 +88,7 @@ class TableVectorStore:
 
     @property
     def vectorstore(self) -> Chroma:
-        """Lazy-initialized LangChain Chroma vector store.
-
-        Attempts to load an existing persisted store. If none exists,
-        raises :class:`VectorIndexError`.
-
-        Returns:
-            The :class:`Chroma` vector store instance.
-
-        Raises:
-            VectorIndexError: If no persisted store is found and no
-                documents have been added.
-        """
+        """지연 초기화 LangChain Chroma 벡터 저장소."""
         if self._vectorstore is not None:
             return self._vectorstore
 
@@ -150,7 +114,7 @@ class TableVectorStore:
 
     @property
     def is_initialized(self) -> bool:
-        """Check whether the vector store has been created or loaded."""
+        """벡터 저장소가 생성 또는 로드되었는지 확인한다."""
         try:
             _ = self.vectorstore
             return True
@@ -160,19 +124,10 @@ class TableVectorStore:
     # -- Document management -------------------------------------------------
 
     def add_documents(self, documents: List[Document], skip_existing: bool = True) -> List[str]:
-        """Add LangChain Documents to the vector store.
-
-        If the vector store does not yet exist, it is created. Otherwise,
-        documents are appended to the existing collection.
-
-        When encryption is enabled, page_content is encrypted before storage
-        while embeddings are generated from the original plaintext.
-
-        When *skip_existing* is ``True``, documents whose content hash
-        is already in the index are silently skipped.
-
-        Returns:
-            List of ChromaDB document IDs for the inserted documents.
+        """
+        LangChain Document를 벡터 저장소에 추가한다.
+        
+        저장소가 아직 초기화되지 않았으면 먼저 생성한다.
         """
         import shutil
 
@@ -297,16 +252,12 @@ class TableVectorStore:
 
     @staticmethod
     def _document_hash(document: Document) -> str:
-        """Return a stable SHA-256 hash for a Document based on content + metadata."""
+        """Document 내용 + 메타데이터 기반 안정적인 SHA-256 해시를 반환한다."""
         payload = f"{document.page_content}|||{json.dumps(document.metadata, sort_keys=True, ensure_ascii=False)}"
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def _persist(self) -> None:
-        """Persist the vector store to disk.
-
-        ChromaDB in recent versions auto-persists, but this is called
-        explicitly for safety.
-        """
+        """벡터 저장소를 디스크에 영속화한다."""
         if self._vectorstore is not None:
             try:
                 self._vectorstore.persist()
@@ -323,22 +274,7 @@ class TableVectorStore:
         k: int = 5,
         filter_metadata: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[Document, float]]:
-        """Search for similar tables using vector similarity.
-
-        Args:
-            query: Natural language search query.
-            k: Maximum number of results to return.
-            filter_metadata: Optional ChromaDB metadata filter. Use
-                ``{"document_name": "report.pdf"}`` to restrict results
-                to a specific document.
-
-        Returns:
-            List of ``(Document, distance_score)`` tuples sorted by
-            similarity (lower distance = more similar).
-
-        Raises:
-            VectorSearchError: If the search operation fails.
-        """
+        """벡터 유사도로 유사한 표를 검색한다."""
         try:
             store = self.vectorstore
         except VectorIndexError as exc:
@@ -390,11 +326,7 @@ class TableVectorStore:
     # -- Statistics ----------------------------------------------------------
 
     def get_document_count(self) -> int:
-        """Return the number of documents in the vector store.
-
-        Returns:
-            Number of documents, or 0 if the store is not initialized.
-        """
+        """벡터 저장소의 문서 수를 반환한다."""
         try:
             store = self.vectorstore
             collection = store._collection
@@ -403,12 +335,7 @@ class TableVectorStore:
             return 0
 
     def get_stats(self) -> Dict[str, Any]:
-        """Return statistics about the vector store.
-
-        Returns:
-            Dictionary with keys ``document_count``, ``collection_name``,
-            and ``persist_dir``.
-        """
+        """벡터 저장소 통계를 반환한다."""
         return {
             "document_count": self.get_document_count(),
             "collection_name": self.collection_name,
@@ -419,10 +346,10 @@ class TableVectorStore:
     # -- Reset ---------------------------------------------------------------
 
     def reset(self) -> None:
-        """Delete the vector store and all its data.
-
-        Removes the persisted files and resets the in-memory store.
-        Call this when you want to rebuild the index from scratch.
+        """
+        벡터 저장소와 모든 데이터를 삭제한다.
+        
+        영속화된 파일을 제거하고 내부 상태를 초기화한다.
         """
         import shutil
 

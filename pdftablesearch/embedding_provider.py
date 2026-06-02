@@ -1,9 +1,7 @@
-"""
-Unified embedding provider factory for PDFTableSearch.
+"""임베딩 제공자 팩토리.
 
-Provides a single entry point to create embedding instances
-based on configuration, supporting both local SentenceTransformers
-and remote z.ai API providers.
+로컬 SentenceTransformers 및 원격 z.ai API 제공자를 지원하는
+통합 임베딩 인스턴스 생성 진입점.
 """
 
 from __future__ import annotations
@@ -22,46 +20,33 @@ ProviderType = Literal["local", "remote"]
 def create_embeddings(
     provider: ProviderType = "local",
     *,
-    # Remote (z.ai) settings
+    # 원격(z.ai) 설정
     api_key: Optional[str] = None,
     endpoint: Optional[str] = None,
     model: Optional[str] = None,
     timeout: int = 30,
     batch_size: int = 20,
-    # Local (SentenceTransformers) settings
+    # 로컬(SentenceTransformers) 설정
     local_model: str = "BAAI/bge-m3",
     device: str = "cpu",
 ) -> Embeddings:
-    """Create an Embeddings instance based on the specified provider.
+    """지정된 제공자에 맞는 임베딩 인스턴스를 생성한다.
 
-    Args:
-        provider: Which embedding provider to use.
-            ``"local"`` uses SentenceTransformers (no API key needed).
-            ``"remote"`` uses the z.ai API (requires API key).
-        api_key: z.ai API key (only for ``"remote"``).
-            Falls back to ``ZAI_API_KEY`` env var.
-        endpoint: Override embedding API endpoint.
-        model: Override embedding model name.
-        timeout: API request timeout in seconds.
-        batch_size: Maximum texts per batch for remote API.
-        local_model: SentenceTransformers model name.
-        device: Device for local model (``"cpu"`` or ``"cuda"``).
+    매개변수:
+        provider: 임베딩 제공자 유형.
+            ``"local"``은 SentenceTransformers 사용 (API 키 불필요).
+            ``"remote"``는 z.ai API 사용 (API 키 필요).
+        api_key: z.ai API 키 (``"remote"`` 전용).
+            미지정 시 ``ZAI_API_KEY`` 환경변수 사용.
+        endpoint: 임베딩 API 엔드포인트 오버라이드.
+        model: 임베딩 모델명 오버라이드.
+        timeout: API 요청 타임아웃(초).
+        batch_size: 원격 API 호출 시 최대 텍스트 수.
+        local_model: SentenceTransformers 모델명.
+        device: 로컬 모델 실행 디바이스 (``"cpu"`` 또는 ``"cuda"``).
 
-    Returns:
-        LangChain-compatible Embeddings instance.
-
-    Example::
-
-        from pdftablesearch.embedding_provider import create_embeddings
-
-        # Local (default, no API key needed)
-        emb = create_embeddings("local")
-
-        # Remote (z.ai API)
-        emb = create_embeddings("remote", api_key="your-key")
-
-        # Custom local model
-        emb = create_embeddings("local", local_model="distiluse-base-multilingual-cased-v2")
+    반환:
+        LangChain 호환 Embeddings 인스턴스.
     """
     if provider == "local":
         from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings

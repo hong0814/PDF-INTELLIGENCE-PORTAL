@@ -1,10 +1,8 @@
-"""
-Core search pipeline for PDFTableSearch.
+"""PDFTableSearch 핵심 검색 파이프라인.
 
-Orchestrates the full workflow: PDF loading, vector indexing, similarity
-search, optional LLM re-ranking, and result formatting. Exposes the
-primary public API function ``search_tables`` which handles both
-single-document and multi-document search.
+PDF 로딩, 벡터 인덱싱, 유사도 검색, LLM 리랭킹(선택), 결과 포매팅의
+전체 워크플로우를 오케스트레이션한다. 단일/다중 문서 검색을 모두
+지원하는 기본 공개 API ``search_tables``를 제공한다.
 
 Usage::
 
@@ -34,7 +32,7 @@ from pdftablesearch.models import (
     TableSearchResult,
 )
 from pdftablesearch.utils import get_logger
-from pdftablesearch.vectorstore import TableVectorStore
+from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
 logger = get_logger(__name__)
 
@@ -54,62 +52,11 @@ def search_tables(
     progress_callback: Optional[Callable[..., None]] = None,
     filters: Optional[Dict[str, Any]] = None,
 ) -> Union[List[TableSearchResult], MultiDocumentSearchResult]:
-    """Search for tables in one or more PDF documents.
-
-    When *pdf_path* is a single string the function operates in
-    **single-document mode** and returns a flat ``List[TableSearchResult]``.
-    When *pdf_path* is a list of strings it switches to **multi-document
-    mode** and returns a :class:`MultiDocumentSearchResult` that
-    aggregates results across all documents.
-
-    Args:
-        pdf_path: Path to a single PDF file (``str``) or a list of PDF
-            file paths (``List[str]``).
-        query: Natural language search query (Korean or English).
-        max_results: Maximum number of results to return.  In
-            single-document mode this is the overall limit.  In
-            multi-document mode this acts as ``max_total_results``.
-        max_results_per_doc: Maximum results per individual document.
-            Only used in multi-document mode.  Defaults to ``None``
-            (no per-document limit).
-        use_llm_rerank: Whether to apply LLM-based re-ranking after
-            vector search.  Defaults to ``False``.
-        chroma_persist_dir: Directory for ChromaDB persistence.
-        output_dir: Optional override for PDF conversion output.
-            Only used in single-document mode.
-        progress_callback: Optional callback ``callback(current, total,
-            document_name, status)`` invoked during batch processing.
-            Only used in multi-document mode.
-
-    Returns:
-        *Single document*: ``List[TableSearchResult]`` sorted by
-        relevance score (descending).
-
-        *Multiple documents*: :class:`MultiDocumentSearchResult`
-        with aggregated results, per-document counts, and total count.
-
-    Raises:
-        FileNotFoundError: If any PDF file does not exist.
-        TableSearchError: If the search pipeline encounters an error.
-        VectorSearchError: If vector search fails.
-
-    Example::
-
-        from pdftablesearch import search_tables
-
-        # Single document
-        results = search_tables("financial_report.pdf", "quarterly revenue")
-        for table in results:
-            print(f"Page {table.page_number}: {table.table_id}")
-
-        # Multiple documents
-        result = search_tables(
-            ["report1.pdf", "report2.pdf"],
-            "annual revenue",
-            max_results=10,
-            max_results_per_doc=3,
-        )
-        print(f"Found {result.total_results} tables")
+    """
+    하나 이상의 PDF 문서에서 표를 검색한다.
+    
+    *pdf_path*가 단일 문자열이면 단일 문서 검색,
+    리스트면 다중 문서 검색을 수행한다.
     """
     # Determine mode from input type
     if isinstance(pdf_path, str):
@@ -148,22 +95,10 @@ def _search_single(
     chroma_persist_dir: str = "./.chroma",
     output_dir: Optional[str] = None,
 ) -> List[TableSearchResult]:
-    """Execute a single-document search pipeline.
-
-    Handles the complete workflow: PDF conversion, table extraction,
-    vector indexing, similarity search, and optional LLM re-ranking.
-
-    Args:
-        pdf_path: Path to the PDF file to search.
-        query: Natural language search query.
-        max_results: Maximum number of results to return.
-        use_llm_rerank: Whether to apply LLM re-ranking.
-        chroma_persist_dir: Directory for ChromaDB persistence.
-        api_key: Optional z.ai API key.
-        output_dir: Optional override for PDF conversion output.
-
-    Returns:
-        List of :class:`TableSearchResult` objects sorted by relevance.
+    """
+    단일 문서 검색 파이프라인을 실행한다.
+    
+    PDF 변환, 벡터 인덱싱, 검색, 결과 포매팅의 전체 워크플로우를 처리한다.
     """
     logger.info(
         "Starting table search: pdf=%s, query='%s', max_results=%d",
@@ -230,26 +165,10 @@ def _search_multi(
     chroma_persist_dir: str = "./.chroma",
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> MultiDocumentSearchResult:
-    """Execute a multi-document search pipeline.
-
-    Processes each PDF independently, loads all tables into a shared
-    vector store, and performs a unified similarity search across all
-    documents.
-
-    Args:
-        pdf_paths: List of PDF file paths to search.
-        query: Natural language search query.
-        max_total_results: Maximum total results across all documents.
-        max_results_per_doc: Maximum results per individual document.
-            ``None`` means no per-document limit.
-        use_llm_rerank: Whether to use LLM re-ranking.
-        chroma_persist_dir: ChromaDB persistence directory.
-        api_key: Optional z.ai API key.
-        progress_callback: Optional progress callback.
-
-    Returns:
-        :class:`MultiDocumentSearchResult` with results from all
-        documents, sorted by relevance.
+    """
+    다중 문서 검색 파이프라인을 실행한다.
+    
+    각 PDF를 독립적으로 처리하고 결과를 병합한다.
     """
     logger.info(
         "Starting multi-document search: %d PDFs, query='%s'",
@@ -324,21 +243,7 @@ def _load_all_documents_sequential(
     processor: PDFProcessor,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> List[Document]:
-    """Load documents from all PDFs in parallel using ThreadPoolExecutor.
-
-    Each PDF is processed by an independent ``PDFProcessor`` instance to
-    avoid shared-state conflicts.  Results are collected and returned in
-    the original input order.
-
-    Args:
-        pdf_paths: List of PDF paths to load.
-        processor: Template ``PDFProcessor`` (used for its configuration).
-        progress_callback: Optional callback ``callback(current, total,
-            document_name, status)`` invoked after each PDF is processed.
-
-    Returns:
-        Accumulated list of all Documents from all PDFs.
-    """
+    """ThreadPoolExecutor로 모든 PDF에서 문서를 병렬 로딩한다."""
     if not pdf_paths:
         return []
 
@@ -400,21 +305,7 @@ def _execute_search_with_rerank(
     use_llm_rerank: bool,
     max_results: int,
 ) -> List[TableSearchResult]:
-    """Apply optional LLM re-ranking and format results.
-
-    This helper encapsulates the shared re-ranking logic used by both
-    single-document and multi-document search pipelines.
-
-    Args:
-        search_results: Raw (Document, score) tuples from vector search.
-        use_llm_rerank: Whether to attempt LLM re-ranking.
-        max_results: Target number of results (used as ``top_k`` for
-            the reranker).
-        api_key: Resolved API key for the reranker.
-
-    Returns:
-        Formatted list of :class:`TableSearchResult` objects.
-    """
+    """선택적 LLM 리랭킹을 적용하고 결과를 포매팅한다."""
     if use_llm_rerank and search_results:
         try:
             from pdftablesearch.reranker import ZaiRerankCompressor
@@ -441,14 +332,7 @@ def _execute_search_with_rerank(
 def _format_search_results(
     search_results: List[tuple[Document, float]],
 ) -> List[TableSearchResult]:
-    """Convert raw vector search results to TableSearchResult objects.
-
-    Args:
-        search_results: List of (Document, distance_score) tuples.
-
-    Returns:
-        Sorted list of TableSearchResult objects.
-    """
+    """벡터 검색 원시 결과를 ``TableSearchResult`` 객체로 변환한다."""
     results: List[TableSearchResult] = []
 
     for doc, score in search_results:
@@ -465,19 +349,7 @@ def _format_reranked_results(
     reranked_docs: List[Document],
     original_results: List[tuple[Document, float]],
 ) -> List[TableSearchResult]:
-    """Convert re-ranked documents to TableSearchResult objects.
-
-    Merges the original vector similarity score with the new rerank
-    score from the LLM.
-
-    Args:
-        reranked_docs: Documents after LLM re-ranking.
-        original_results: Original (Document, score) tuples for score
-            lookup.
-
-    Returns:
-        Sorted list of TableSearchResult objects with both scores.
-    """
+    """리랭킹된 문서를 ``TableSearchResult`` 객체로 변환한다."""
     # Build lookup: table_id -> vector score
     score_lookup: Dict[str, float] = {}
     for doc, score in original_results:
@@ -513,15 +385,7 @@ def _apply_per_doc_limit(
     results: List[TableSearchResult],
     max_per_doc: int,
 ) -> List[TableSearchResult]:
-    """Apply per-document result limit while preserving ranking.
-
-    Args:
-        results: Full result list sorted by relevance.
-        max_per_doc: Maximum results allowed per document.
-
-    Returns:
-        Filtered list respecting the per-document limit.
-    """
+    """순위를 유지하면서 문서당 결과 제한을 적용한다."""
     doc_counts: Dict[str, int] = {}
     filtered: List[TableSearchResult] = []
 
@@ -540,21 +404,7 @@ def _apply_filters(
     results: List[TableSearchResult],
     filters: Dict[str, Any],
 ) -> List[TableSearchResult]:
-    """Apply metadata-based filters to search results.
-
-    Supported filter keys:
-        - ``page_range``: Tuple ``(min_page, max_page)`` inclusive.
-        - ``min_rows``: Minimum number of data rows in the table.
-        - ``table_title_contains``: Substring that must appear in the title.
-        - ``document_name``: Exact document name to match.
-
-    Args:
-        results: Search results to filter.
-        filters: Dictionary of filter criteria.
-
-    Returns:
-        Filtered list of results.
-    """
+    """메타데이터 기반 필터를 검색 결과에 적용한다."""
     filtered = results
 
     page_range = filters.get("page_range")

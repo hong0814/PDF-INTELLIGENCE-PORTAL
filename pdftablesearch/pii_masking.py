@@ -1,4 +1,4 @@
-"""Deterministic PII detection and masking helpers."""
+"""결정론적 PII(개인정보) 감지 및 마스킹 헬퍼."""
 
 from __future__ import annotations
 

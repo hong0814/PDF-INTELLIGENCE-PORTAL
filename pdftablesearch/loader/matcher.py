@@ -1,8 +1,7 @@
-"""Content-based matching between HTML tables and JSON metadata.
+"""HTML 표와 JSON 메타데이터 간 콘텐츠 기반 매칭.
 
-Uses Jaccard word-overlap similarity to associate HTML-extracted tables
-with their corresponding JSON metadata entries (page numbers, bounding
-boxes).
+Jaccard 단어 오버랩 유사도를 사용하여 HTML에서 추출한 표와
+해당 JSON 메타데이터 항목(페이지 번호, 바운딩 박스)을 연결한다.
 """
 
 from __future__ import annotations
@@ -17,10 +16,7 @@ _MINIMUM_MATCH_THRESHOLD = 0.3
 
 
 def calculate_table_similarity(html_content: str, json_meta: Dict[str, Any]) -> float:
-    """Compute similarity between HTML table text and JSON table metadata.
-
-    Uses Jaccard similarity on normalized word sets.
-    """
+    """HTML 표 텍스트와 JSON 표 메타데이터 간 Jaccard 유사도를 계산한다."""
     table_data = json_meta.get("table_data", {})
     json_rows = table_data.get("rows", [])
 
@@ -73,15 +69,9 @@ def find_best_json_match(
     all_metadata: List[Dict[str, Any]],
     used_indices: Set[int],
 ) -> Optional[int]:
-    """Find the best matching JSON table index for an HTML table.
+    """HTML 표에 가장 잘 매칭되는 JSON 표 인덱스를 찾는다.
 
-    Args:
-        html_content: Normalized text from the HTML table.
-        all_metadata: All parsed JSON metadata entries.
-        used_indices: Indices already claimed by prior matches.
-
-    Returns:
-        Best matching index, or ``None`` if below threshold.
+    임계값 미만이면 ``None``을 반환한다.
     """
     best_idx: Optional[int] = None
     best_score = _MINIMUM_MATCH_THRESHOLD

@@ -1,11 +1,9 @@
-"""
-z.ai LLM client for smart table selection.
+"""z.ai LLM 클라이언트 — 스마트 표 선택.
 
-Provides ``ZaiLLMClient``, a wrapper around the z.ai ChatOpenAI-compatible
-API that sends candidate table descriptions to an LLM and retrieves a
-structured selection of the most relevant table.
+``ZaiLLMClient`` — z.ai ChatOpenAI 호환 API 래퍼로
+후보 표 설명을 LLM에 보내 가장 관련성 높은 표의 구조화된 선택 결과를 받는다.
 
-The client handles:
+처리 항목:
 
 - Prompt construction for table selection
 - LLM API invocation with retry logic
@@ -46,15 +44,10 @@ _DEFAULT_MAX_RETRIES = 3
 
 
 class LLMCache:
-    """Disk-based cache for LLM table-selection responses.
-
-    Stores one JSON file per unique (query, table_descriptions) pair.
-    Entries expire after ``ttl`` seconds.
-
-    Args:
-        cache_dir: Directory for cached response files.
-        enabled: When ``False`` all operations are no-ops.
-        ttl: Time-to-live in seconds for cached entries.
+    """
+    LLM 표 선택 응답의 디스크 기반 캐시.
+    
+    캐시 키당 하나의 JSON 파일을 저장한다.
     """
 
     def __init__(
@@ -82,7 +75,7 @@ class LLMCache:
     # -- public API ----------------------------------------------------------
 
     def get(self, query: str, table_descriptions: str) -> Optional[LLMSelectionResult]:
-        """Return cached result or ``None`` on miss / expiry."""
+        """캐시된 결과를 반환하거나 미스/만료 시 ``None``을 반환한다."""
         if not self.enabled:
             return None
 
@@ -105,7 +98,7 @@ class LLMCache:
     def put(
         self, query: str, table_descriptions: str, result: LLMSelectionResult
     ) -> None:
-        """Persist an LLM selection result to disk."""
+        """LLM 선택 결과를 디스크에 영속화한다."""
         if not self.enabled:
             return
 
@@ -162,16 +155,7 @@ Respond with ONLY a JSON object in this exact format:
 
 @dataclass
 class LLMSelectionResult:
-    """Structured result from LLM table selection.
-
-    Attributes:
-        selected_index: 1-based index of the selected table in the
-            candidate list.
-        confidence: Confidence score between 0.0 and 1.0.
-        reasoning: Brief explanation in Korean for why this table
-            was selected.
-        raw_response: The raw LLM response text for debugging.
-    """
+    """LLM 표 선택의 구조화된 결과."""
 
     selected_index: int
     confidence: float = 0.0
@@ -184,29 +168,11 @@ class LLMSelectionResult:
 # ---------------------------------------------------------------------------
 
 class ZaiLLMClient:
-    """z.ai LLM client for table selection.
-
-    Wraps the z.ai ChatOpenAI-compatible API to select the most
-    relevant table from a list of candidates. Uses the same API
-    endpoint and authentication as the existing reranker module.
-
-    Args:
-        api_key: z.ai API key. Falls back to ``ZAI_API_KEY`` env var.
-        llm_endpoint: URL of the LLM API endpoint.
-        model: LLM model name (e.g., ``glm-5.1``, ``glm-5.0``).
-        timeout: LLM API timeout in seconds.
-        max_retries: Maximum number of retry attempts on transient errors.
-
-    Example::
-
-        from pdftablesearch.llm_client import ZaiLLMClient
-
-        client = ZaiLLMClient(api_key="your-key")
-        result = client.select_table(
-            query="포괄손익계산서",
-            table_descriptions="Table 1: ...\\nTable 2: ..."
-        )
-        print(f"Selected table {result.selected_index}")
+    """
+    z.ai LLM 클라이언트 — 표 선택.
+    
+    z.ai ChatOpenAI 호환 API 래퍼로 후보 표 설명을 LLM에 보내
+    가장 관련성 높은 표의 구조화된 선택 결과를 받는다.
     """
 
     def __init__(
@@ -259,21 +225,7 @@ class ZaiLLMClient:
         query: str,
         table_descriptions: str,
     ) -> LLMSelectionResult:
-        """Send candidate tables to the LLM and get the best selection.
-
-        Args:
-            query: The user's natural language search query.
-            table_descriptions: Formatted string containing numbered
-                table descriptions for the LLM to evaluate.
-
-        Returns:
-            :class:`LLMSelectionResult` with the selected table index,
-            confidence score, and reasoning.
-
-        Raises:
-            APIError: If the LLM API call fails after all retries.
-            ValueError: If the response cannot be parsed as valid JSON.
-        """
+        """후보 표를 LLM에 보내 최적 선택을 받는다."""
         logger.info(
             "Calling LLM for table selection: query='%s', desc_length=%d",
             query[:100],
@@ -320,25 +272,7 @@ class ZaiLLMClient:
         candidates: List[Dict[str, Any]],
         content_max_length: int = 500,
     ) -> LLMSelectionResult:
-        """Convenience method: format candidates and select best table.
-
-        Takes a list of candidate dictionaries (from
-        :func:`smart_search._prepare_candidates`) and handles
-        description formatting before calling :meth:`select_table`.
-
-        Args:
-            query: The user's search query.
-            candidates: List of candidate dicts with keys ``index``,
-                ``page_number``, ``title``, ``content``.
-            content_max_length: Maximum characters for each table's
-                content preview.
-
-        Returns:
-            :class:`LLMSelectionResult` with the selected table index.
-
-        Raises:
-            APIError: If the LLM API call fails.
-        """
+        """편의 메서드: 후보를 포맷하고 최적 표를 선택한다."""
         descriptions = _format_candidates_for_llm(
             candidates, content_max_length=content_max_length
         )
@@ -350,19 +284,7 @@ class ZaiLLMClient:
 # ---------------------------------------------------------------------------
 
 def _truncate_html_safe(html_content: str, max_length: int = 500) -> str:
-    """Truncate HTML content without breaking open tags.
-
-    Finds the last ``<`` before *max_length* that does not have a matching
-    ``>`` and cuts before it, then appends ``...``.  If the content is
-    shorter than *max_length*, it is returned unchanged.
-
-    Args:
-        html_content: Raw HTML string to truncate.
-        max_length: Maximum character length for the result.
-
-    Returns:
-        Truncated HTML string (may be shorter than *max_length*).
-    """
+    """열린 태그를 끊지 않고 HTML 콘텐츠를 자른다."""
     if len(html_content) <= max_length:
         return html_content
 
@@ -382,23 +304,7 @@ def _format_candidates_for_llm(
     candidates: List[Dict[str, Any]],
     content_max_length: int = 500,
 ) -> str:
-    """Format candidate tables into a structured description for the LLM.
-
-    Each candidate is rendered as a numbered block with title, page,
-    and an HTML content preview.  The content is truncated safely so
-    that HTML tags are not split.
-
-    Args:
-        candidates: List of dicts, each with keys:
-            - ``index`` (int): 1-based position
-            - ``page_number`` (int): PDF page number
-            - ``title`` (str or None): Table title
-            - ``content`` (str): Table content (HTML or plain text)
-        content_max_length: Max characters for content preview.
-
-    Returns:
-        Formatted string ready for the LLM prompt.
-    """
+    """후보 표를 LLM용 구조화된 설명으로 포맷한다."""
     parts: List[str] = []
 
     for candidate in candidates:
@@ -423,21 +329,7 @@ def _format_candidates_for_llm(
 # ---------------------------------------------------------------------------
 
 def _parse_selection_response(response_text: str) -> LLMSelectionResult:
-    """Parse the LLM's JSON response into a structured result.
-
-    Handles various response formats including markdown code blocks
-    and extra text around the JSON object.
-
-    Args:
-        response_text: Raw LLM response text.
-
-    Returns:
-        :class:`LLMSelectionResult` with parsed fields.
-
-    Raises:
-        ValueError: If the response cannot be parsed as valid JSON
-            or is missing required fields.
-    """
+    """LLM JSON 응답을 구조화된 결과로 파싱한다."""
     content = response_text.strip()
 
     # Strip markdown code blocks if present
@@ -492,14 +384,7 @@ def _parse_selection_response(response_text: str) -> LLMSelectionResult:
 
 
 def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
-    """Attempt to parse text as JSON, returning None on failure.
-
-    Args:
-        text: String to parse as JSON.
-
-    Returns:
-        Parsed dictionary or None.
-    """
+    """텍스트를 JSON으로 파싱을 시도하고 실패 시 None을 반환한다."""
     try:
         result = json.loads(text)
         if isinstance(result, dict):

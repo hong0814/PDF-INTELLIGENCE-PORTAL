@@ -1,4 +1,4 @@
-"""Markdown table extraction and context/title parsing."""
+"""Markdown 표 추출 및 컨텍스트/제목 파싱."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ _SEPARATOR_RE = re.compile(r"^\s*\|[-:]+\|.*\|[-:]+\|?\s*$")
 
 
 def extract_markdown_tables(markdown_content: str) -> List[str]:
-    """Extract markdown tables from content string."""
+    """콘텐츠 문자열에서 마크다운 표를 추출한다."""
     tables: List[str] = []
     current_table_lines: List[str] = []
 
@@ -38,7 +38,7 @@ def extract_markdown_tables(markdown_content: str) -> List[str]:
 def extract_markdown_tables_from_file(
     markdown_path: "Path",
 ) -> List[Tuple[str, int]]:
-    """Extract markdown tables with their start line numbers."""
+    """마크다운 표와 시작 줄 번호를 함께 추출한다."""
     from pathlib import Path
 
     if not markdown_path.exists():
@@ -78,9 +78,9 @@ def extract_table_info(
     table_start_lines: List[int],
     json_metadata: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Extract table titles and context from markdown for given table positions.
+    """주어진 표 위치에서 제목과 컨텍스트를 추출한다.
 
-    Returns list of dicts with ``title``, ``context``, and ``page_estimate`` keys.
+    ``title``, ``context`` 키를 가진 딕셔너리 리스트를 반환한다.
     """
     from pathlib import Path
 

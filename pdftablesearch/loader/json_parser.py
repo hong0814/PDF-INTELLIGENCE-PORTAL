@@ -1,4 +1,4 @@
-"""JSON metadata parsing for opendataloader-pdf output."""
+"""opendataloader-pdf JSON 출력에서 테이블 메타데이터 파싱."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ logger = get_logger(__name__)
 
 
 def parse_json_metadata(json_path: "Path") -> List[Dict[str, Any]]:
-    """Parse table metadata from opendataloader-pdf JSON output.
+    """opendataloader-pdf JSON 출력에서 표 메타데이터를 파싱한다.
 
-    Returns list of dicts with ``page_number``, ``bounding_box``,
-    ``index``, ``id``, and ``table_data`` keys.
+    ``page_number``, ``bounding_box``, ``index``, ``id``, ``table_data`` 키를 가진
+    딕셔너리 리스트를 반환한다.
     """
     from pathlib import Path
 
@@ -68,7 +68,7 @@ def parse_json_metadata(json_path: "Path") -> List[Dict[str, Any]]:
 
 
 def reconstruct_table_markdown(table_meta: Dict[str, Any]) -> str:
-    """Reconstruct a markdown table from JSON cell data."""
+    """JSON 셀 데이터에서 마크다운 표를 재구성한다."""
     table_data = table_meta.get("table_data", {})
     rows = table_data.get("rows", [])
     num_cols = table_data.get("num_cols", table_data.get("number of columns", 0))

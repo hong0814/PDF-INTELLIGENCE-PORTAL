@@ -1,11 +1,9 @@
-"""
-Smart search: vector similarity + LLM re-ranking for precise table identification.
+"""스마트 검색 — 벡터 유사도 + LLM 리랭킹으로 정밀한 표 식별.
 
-Provides the :func:`smart_search` entry point that combines vector-based
-candidate retrieval with LLM-based selection to find the single most
-relevant table for a given query.
+:func:`smart_search` 진입점은 벡터 기반 후보 검색과 LLM 기반 선택을
+결합하여 주어진 쿼리에 가장 관련성 높은 단일 표를 찾는다.
 
-Pipeline::
+파이프라인::
 
     1. Vector search (top_k candidates)
     2. Candidate formatting for LLM
@@ -53,21 +51,9 @@ def _prepare_candidates(
     search_results: List[TableSearchResult],
     content_max_length: int = _DEFAULT_CONTENT_MAX_LENGTH,
 ) -> List[Dict[str, Any]]:
-    """Format vector search results into candidate dicts for the LLM.
+    """벡터 검색 결과를 LLM용 후보 딕셔너리로 포맷한다.
 
-    Each candidate includes an index, page number, title, and truncated
-    content preview.  The index is 1-based to match the LLM prompt
-    format.
-
-    Args:
-        search_results: Sorted list of :class:`TableSearchResult`
-            from vector similarity search.
-        content_max_length: Maximum characters of table content to
-            include per candidate.
-
-    Returns:
-        List of dictionaries with keys ``index``, ``page_number``,
-        ``title``, ``content``, ``table_id``.
+    인덱스는 1-based로 LLM 프롬프트 형식에 맞춘다.
     """
     candidates: List[Dict[str, Any]] = []
 
@@ -100,47 +86,10 @@ def smart_search(
     chroma_persist_dir: str = "./.chroma",
     progress_callback: Optional[Callable] = None,
 ) -> TableSearchResult:
-    """Search for the single most relevant table using vector + LLM.
+    """벡터 검색 + LLM으로 가장 관련성 높은 표 하나를 찾는다.
 
-    Combines vector similarity search to retrieve ``top_k`` candidate
-    tables with an LLM-based selection step that picks the best match.
-    Falls back to the top vector search result if the LLM fails and
-    ``fallback_to_vector`` is ``True``.
-
-    Args:
-        query: Natural language search query (Korean or English).
-        pdf_path: Path to the PDF document.
-        top_k: Number of vector search candidates for LLM evaluation.
-            Default 20.
-        llm_model: LLM model name (``glm-5.1``, ``glm-5.0``, etc.).
-        api_key: z.ai API key.  Falls back to ``ZAI_API_KEY`` env var.
-        use_hybrid: Whether to use hybrid PDF processing mode.
-        output_dir: Override for PDF conversion output directory.
-        fallback_to_vector: If ``True``, return vector search #1
-            when the LLM fails.  If ``False``, raise an exception.
-        chroma_persist_dir: Directory for ChromaDB persistence.
-        progress_callback: Optional callable ``(phase, message, pct)``
-            invoked at key pipeline stages for UI progress reporting.
-
-    Returns:
-        Single :class:`TableSearchResult` with the highest LLM
-        confidence, or the best vector match on fallback.
-
-    Raises:
-        TableSearchError: If vector search fails, or if LLM fails
-            and ``fallback_to_vector`` is ``False``.
-        FileNotFoundError: If the PDF file does not exist.
-
-    Example::
-
-        from pdftablesearch.smart_search import smart_search
-
-        result = smart_search(
-            query="포괄손익계산서",
-            pdf_path="report.pdf",
-            top_k=20,
-        )
-        print(f"Best match: {result.table_title} (page {result.page_number})")
+    ``top_k``개 후보를 벡터 검색으로 가져오고 LLM이 최적 표를 선택한다.
+    LLM 실패 시 ``fallback_to_vector``가 ``True``면 벡터 #1 결과를 반환한다.
     """
     start_time = time.time()
     logger.info(
@@ -248,24 +197,9 @@ def _run_vector_search(
     output_dir: Optional[str],
     chroma_persist_dir: str,
 ) -> List[TableSearchResult]:
-    """Execute the vector search phase of smart_search.
+    """smart_search의 벡터 검색 단계를 실행한다.
 
-    Uses :class:`~pdftablesearch.search.PDFTableSearch` to load the PDF,
-    build a vector index, and retrieve the top-k candidates.
-
-    Args:
-        query: Search query string.
-        pdf_path: Path to the PDF document.
-        top_k: Number of candidates to retrieve.
-        use_hybrid: Whether to use hybrid PDF processing.
-        output_dir: Optional output directory override.
-        chroma_persist_dir: ChromaDB persistence directory.
-
-    Returns:
-        List of :class:`TableSearchResult` sorted by vector similarity.
-
-    Raises:
-        VectorSearchError: If the vector search fails.
+    PDF 로딩, 벡터 인덱스 구축, top-k 후보 검색을 수행한다.
     """
     from pdftablesearch.search import PDFTableSearch
 
@@ -302,21 +236,10 @@ def _run_llm_selection(
     llm_model: str,
     api_key: Optional[str],
 ) -> Optional[TableSearchResult]:
-    """Execute the LLM selection phase of smart_search.
+    """smart_search의 LLM 선택 단계를 실행한다.
 
-    Formats the candidate results and sends them to the LLM for
-    selection.  Returns ``None`` on any failure (caller decides
-    fallback behavior).
-
-    Args:
-        query: Original search query.
-        candidates_results: Vector search results.
-        llm_model: LLM model name.
-        api_key: Optional z.ai API key.
-
-    Returns:
-        Selected :class:`TableSearchResult` with ``rerank_score``
-        set to the LLM confidence, or ``None`` on failure.
+    후보 결과를 포맷하여 LLM에 보내고 선택 결과를 받는다.
+    실패 시 ``None``을 반환한다 (호출자가 fallback 결정).
     """
     # Prepare candidates
     candidates = _prepare_candidates(candidates_results)

@@ -1,19 +1,3 @@
-"""Table QA: answer natural language questions using search results and LLM.
-
-Takes a search query, finds the most relevant table, and generates an
-LLM-powered answer grounded in the table data.
-
-Usage::
-
-    from pdftablesearch.table_qa import ask_table
-
-    answer = ask_table(
-        query="2023년 매출이 가장 높은 사업부는?",
-        pdf_path="report.pdf",
-    )
-    print(answer)
-"""
-
 from __future__ import annotations
 
 from typing import Optional
@@ -57,22 +41,22 @@ def ask_table(
     output_dir: Optional[str] = None,
     chroma_persist_dir: str = "./.chroma",
 ) -> str:
-    """Answer a natural language question using the most relevant table.
+    """가장 관련성 높은 표를 활용하여 자연어 질문에 답변한다.
 
-    Combines smart_search (vector + LLM selection) with a final QA step
-    that generates a natural language answer grounded in the table data.
+    smart_search(벡터 + LLM 선택)와 최종 QA 단계를 결합하여
+    표 데이터에 근거한 자연어 답변을 생성한다.
 
-    Args:
-        query: Natural language question about the PDF content.
-        pdf_path: Path to the PDF document.
-        llm_model: LLM model name for QA generation.
-        api_key: z.ai API key.
-        use_hybrid: Whether to use hybrid PDF processing.
-        output_dir: Optional output directory override.
-        chroma_persist_dir: ChromaDB persistence directory.
+    매개변수:
+        query: PDF 내용에 대한 자연어 질문.
+        pdf_path: PDF 문서 경로.
+        llm_model: QA 생성용 LLM 모델명.
+        api_key: z.ai API 키.
+        use_hybrid: 하이브리드 PDF 처리 사용 여부.
+        output_dir: 출력 디렉토리 오버라이드.
+        chroma_persist_dir: ChromaDB 영속 디렉토리.
 
-    Returns:
-        Generated answer string in Korean.
+    반환:
+        한국어 답변 문자열.
     """
     logger.info("Table QA: query='%s', pdf='%s'", query[:50], pdf_path)
 

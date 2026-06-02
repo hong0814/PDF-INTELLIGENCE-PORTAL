@@ -1,21 +1,19 @@
-"""
-Custom exceptions for PDFTableSearch library.
+"""PDFTableSearch 커스텀 예외.
 
-Provides a structured exception hierarchy for all error conditions
-encountered during PDF processing, vector indexing, and search operations.
+PDF 처리, 벡터 인덱싱, 검색 과정에서 발생하는 모든 오류 상황에 대한
+구조화된 예외 계층을 제공한다.
 """
 
 
 class TableSearchError(Exception):
-    """Base exception for all table search operations.
+    """표 검색 작업의 기본 예외.
 
-    All custom exceptions in the library inherit from this class,
-    allowing callers to catch any library-specific error with a single
-    except clause.
+    라이브러리의 모든 커스텀 예외가 이 클래스를 상속하므로,
+    단일 except 절로 라이브러리 전체 예외를 catch할 수 있다.
 
-    Attributes:
-        message: Human-readable error description.
-        details: Optional dictionary with additional error context.
+    속성:
+        message: 사람이 읽을 수 있는 오류 설명.
+        details: 추가 오류 컨텍스트를 담은 선택적 딕셔너리.
     """
 
     def __init__(self, message: str, details: dict | None = None) -> None:
@@ -30,47 +28,44 @@ class TableSearchError(Exception):
 
 
 class PDFProcessingError(TableSearchError):
-    """Raised when PDF document processing fails.
+    """PDF 문서 처리 실패 시 발생.
 
-    Typical causes:
-        - Corrupt or password-protected PDF
-        - opendataloader-pdf conversion failure
-        - Invalid file format
+    일반적인 원인:
+        - 손상되거나 암호가 걸린 PDF
+        - opendataloader-pdf 변환 실패
+        - 잘못된 파일 형식
     """
 
     pass
 
 
 class TableParsingError(TableSearchError):
-    """Raised when table content cannot be parsed from processed output.
+    """변환 결과에서 표 내용을 파싱할 수 없을 때 발생.
 
-    Typical causes:
-        - Malformed markdown output from PDF conversion
-        - Missing or invalid JSON metadata
-        - Unexpected output format changes
+    일반적인 원인:
+        - PDF 변환 결과의 잘못된 마크다운 형식
+        - 누락되거나 유효하지 않은 JSON 메타데이터
+        - 예상과 다른 출력 형식
     """
 
     pass
 
 
 class MetadataMismatchError(TableSearchError):
-    """Raised when JSON metadata and Markdown table counts do not align.
+    """JSON 메타데이터와 마크다운 표 개수가 일치하지 않을 때 발생.
 
-    This typically indicates that the PDF converter produced inconsistent
-    output, where the number of detected tables differs between the
-    structured metadata and the markdown content.
+    PDF 변환기가 구조화된 메타데이터와 마크다운 콘텐츠 간에
+    감지한 표 개수가 서로 다를 때 발생한다.
     """
 
     pass
 
 
 class APIError(TableSearchError):
-    """Base class for all API-related errors.
+    """API 관련 오류의 기본 클래스.
 
-    Inherits from TableSearchError to maintain the exception hierarchy.
-
-    Attributes:
-        status_code: HTTP status code if applicable.
+    속성:
+        status_code: 해당하는 HTTP 상태 코드.
     """
 
     def __init__(
@@ -84,35 +79,35 @@ class APIError(TableSearchError):
 
 
 class APIConnectionError(APIError):
-    """Raised when connection to the API endpoint fails.
+    """API 엔드포인트 연결 실패 시 발생.
 
-    Typical causes:
-        - Network connectivity issues
-        - DNS resolution failure
-        - API endpoint unreachable
-        - Connection timeout
+    일반적인 원인:
+        - 네트워크 연결 문제
+        - DNS 확인 실패
+        - API 엔드포인트 접근 불가
+        - 연결 타임아웃
     """
 
     pass
 
 
 class APIAuthenticationError(APIError):
-    """Raised when API authentication fails.
+    """API 인증 실패 시 발생.
 
-    Typical causes:
-        - Invalid API key
-        - Expired API key
-        - Missing API key
+    일반적인 원인:
+        - 잘못된 API 키
+        - 만료된 API 키
+        - API 키 누락
     """
 
     pass
 
 
 class RateLimitError(APIError):
-    """Raised when API rate limit is exceeded.
+    """API 호출 한도 초과 시 발생.
 
-    Attributes:
-        retry_after: Suggested number of seconds to wait before retrying.
+    속성:
+        retry_after: 재시도 전 대기 권장 시간(초).
     """
 
     def __init__(
@@ -127,36 +122,36 @@ class RateLimitError(APIError):
 
 
 class VectorIndexError(TableSearchError):
-    """Raised when vector index operations fail.
+    """벡터 인덱스 작업 실패 시 발생.
 
-    Typical causes:
-        - Embedding generation failure
-        - ChromaDB initialization failure
-        - Document insertion failure
+    일반적인 원인:
+        - 임베딩 생성 실패
+        - ChromaDB 초기화 실패
+        - 문서 삽입 실패
     """
 
     pass
 
 
 class VectorSearchError(TableSearchError):
-    """Raised when vector similarity search fails.
+    """벡터 유사도 검색 실패 시 발생.
 
-    Typical causes:
-        - Query embedding generation failure
-        - ChromaDB query failure
-        - Empty or corrupted index
+    일반적인 원인:
+        - 쿼리 임베딩 생성 실패
+        - ChromaDB 쿼리 실패
+        - 빈 인덱스 또는 손상된 인덱스
     """
 
     pass
 
 
 class ResultFormattingError(TableSearchError):
-    """Raised when search results cannot be formatted properly.
+    """검색 결과 포매팅 실패 시 발생.
 
-    Typical causes:
-        - Missing required fields in search results
-        - Incompatible metadata format
-        - Serialization failure
+    일반적인 원인:
+        - 검색 결과에 필수 필드 누락
+        - 호환되지 않는 메타데이터 형식
+        - 직렬화 실패
     """
 
     pass

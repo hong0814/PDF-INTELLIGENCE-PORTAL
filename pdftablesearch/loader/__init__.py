@@ -1,15 +1,14 @@
-"""PDF document loading via opendataloader-pdf (HTML-first approach).
+"""opendataloader-pdf 기반 PDF 문서 로딩 (HTML 우선 방식).
 
-This package provides the :class:`PDFProcessor` class and supporting
-functions for PDF-to-document conversion.  The implementation is split
-across focused submodules but all public symbols are re-exported here
-for backward compatibility.
+:class:`PDFProcessor` 클래스와 PDF→문서 변환 지원 함수를 제공한다.
+하위 모듈에 구현이 분산되어 있으나, 모든 공개 심볼은 하위 호환을 위해
+여기서 재export된다.
 
-Submodules:
-    html_parser: HTML table extraction, sanitization, HTML-to-Markdown.
-    json_parser: JSON metadata parsing from opendataloader-pdf output.
-    markdown_parser: Markdown table extraction and title/context parsing.
-    matcher: Content-based HTML↔JSON table matching (Jaccard similarity).
+하위 모듈:
+    html_parser: HTML 표 추출, 정제, HTML→Markdown 변환.
+    json_parser: opendataloader-pdf JSON 출력에서 메타데이터 파싱.
+    markdown_parser: Markdown 표 추출 및 제목/컨텍스트 파싱.
+    matcher: 콘텐츠 기반 HTML↔JSON 표 매칭 (Jaccard 유사도).
 """
 
 from __future__ import annotations
@@ -55,7 +54,7 @@ _SEPARATOR_RE = re.compile(r"^\s*\|[-:]+\|.*\|[-:]+\|?\s*$")
 
 
 class PDFProcessor:
-    """Handles PDF document loading via opendataloader-pdf (HTML-first approach)."""
+    """opendataloader-pdf 기반 PDF 문서 처리 클래스 (HTML 우선 방식)."""
 
     def __init__(
         self,
@@ -76,7 +75,7 @@ class PDFProcessor:
         output_dir: Optional[str] = None,
         use_hybrid: bool = True,
     ) -> Path:
-        """Convert PDF to Markdown + JSON using opendataloader-pdf."""
+        """opendataloader-pdf를 사용하여 PDF를 Markdown + JSON으로 변환한다."""
         validated_path = Path(pdf_path)
         target_dir = Path(output_dir) if output_dir else self._get_output_dir(validated_path)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -130,13 +129,7 @@ class PDFProcessor:
         output_dir: Optional[str] = None,
         use_hybrid: bool = True,
     ) -> ProcessingResult:
-        """Load PDF and extract tables as LangChain Documents (HTML-first approach).
-
-        Extracts tables from HTML as primary source, using JSON metadata for
-        page numbers and bounding boxes. Each Document carries both the raw
-        HTML (``metadata["table_html"]``) and a Markdown fallback
-        (``page_content``).
-        """
+        """PDF를 로드하고 표를 LangChain Document로 추출한다 (HTML 우선 방식)."""
         validated_path = validate_pdf_path(pdf_path)
         document_name = validated_path.stem
 
@@ -305,11 +298,7 @@ class PDFProcessor:
         )
 
     def convert_standard(self, pdf_path: str, output_dir: Optional[str] = None) -> Optional[Path]:
-        """Run standard (non-hybrid) PDF conversion and return the HTML file path.
-
-        Returns None if conversion fails or no HTML is produced.
-        The output is written to a ``standard/`` subdirectory next to the hybrid output.
-        """
+        """표준(비 hybrid) PDF 변환을 실행하고 HTML 파일 경로를 반환한다."""
         validated_path = Path(pdf_path)
         if output_dir:
             target = Path(output_dir) / "standard"
@@ -340,5 +329,5 @@ class PDFProcessor:
         return None
 
     def get_documents(self) -> List[Document]:
-        """Return the LangChain Documents from the most recent load."""
+        """가장 최근 로드한 LangChain Document를 반환한다."""
         return getattr(self, "_last_documents", [])

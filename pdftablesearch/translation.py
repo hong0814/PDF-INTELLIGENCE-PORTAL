@@ -72,10 +72,7 @@ _DEFAULT_MODEL = _settings.zai_llm_model
 # ---------------------------------------------------------------------------
 
 def split_html_by_pages(html_content: str) -> list[tuple[int, str]]:
-    """Split HTML into (page_number, html_chunk) tuples using page-sep markers.
-
-    If no separators are found the entire document is returned as page 1.
-    """
+    """페이지 구분자를 기준으로 HTML을 (페이지 번호, html 조각) 튜플로 분할한다."""
     matches = list(_SEP_PATTERN.finditer(html_content))
 
     if not matches:
@@ -102,7 +99,7 @@ def _translate_page(
     src_name: str,
     tgt_name: str,
 ) -> str:
-    """Translate a page by extracting texts, translating in one call, mapping back."""
+    """페이지에서 텍스트를 추출하고, 한 번의 API 호출로 번역한 뒤 다시 매핑한다."""
     soup = BeautifulSoup(page_html, "html.parser")
 
     # 1. Collect all visible text nodes
@@ -159,7 +156,7 @@ def _translate_all_in_one(
     src_name: str,
     tgt_name: str,
 ) -> dict[str, str]:
-    """Send all texts in one API call with ###N### delimiter format."""
+    """모든 텍스트를 ###N### 구분자 형식으로 단일 API 호출에 보낸다."""
     prompt = _build_translate_prompt(src_name, tgt_name)
 
     # Build input with ###N### markers
@@ -203,7 +200,7 @@ def _parse_delimited_response(
     raw: str,
     original_texts: list[str],
 ) -> dict[str, str]:
-    """Parse ###N### delimited response into {original: translated}."""
+    """###N### 구분자 응답을 {원문: 번역문} 딕셔너리로 파싱한다."""
     cache: dict[str, str] = {}
 
     parts = _DELIM_RE.split(raw)
@@ -226,7 +223,7 @@ def _parse_delimited_response(
 
 
 def _clean_attrs_str(html: str) -> str:
-    """Remove style and class attributes from HTML string."""
+    """HTML 문자열에서 style과 class 속성을 제거한다."""
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup.find_all(True):
         if tag.has_attr("style"):
@@ -241,7 +238,7 @@ def _clean_attrs_str(html: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _wrap_page_html(html_content: str) -> str:
-    """Wrap a page fragment in a full HTML document with styling."""
+    """페이지 조각을 스타일이 포함된 전체 HTML 문서로 감싼다."""
     if re.search(r"<html", html_content, re.IGNORECASE):
         if "</head>" in html_content:
             return html_content.replace("</head>", f"{_STYLE_INJECT}</head>")
@@ -264,7 +261,7 @@ def _translate_page_async(
     tgt: str,
     semaphore: asyncio.Semaphore,
 ) -> dict:
-    """Translate a single page, bounded by semaphore for concurrency control."""
+    """세마포어로 동시성을 제한하여 단일 페이지를 번역한다."""
     async def _do():
         async with semaphore:
             loop = asyncio.get_event_loop()
@@ -290,7 +287,7 @@ async def _translate_pages_concurrent(
     output_dir: Path,
     on_page_done: Optional[Callable[[int, int, str, str], None]],
 ) -> list[dict]:
-    """Translate pages concurrently with semaphore-limited parallelism."""
+    """세마포어로 병렬성을 제한하며 페이지를 동시 번역한다."""
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
     total_pages = len(pages)
 
@@ -324,21 +321,7 @@ def translate_html_by_pages(
     target_lang: str = "en",
     on_page_done: Optional[Callable[[int, int, str, str], None]] = None,
 ) -> list[dict]:
-    """Translate an HTML document page by page with concurrent API calls.
-
-    Uses asyncio + semaphore to translate up to 3 pages simultaneously,
-    reducing total translation time by ~3x compared to sequential processing.
-
-    Args:
-        html_path: Path to the source HTML file.
-        output_dir: Directory where translated page files are written.
-        source_lang: Source language code (``"ko"`` or ``"en"``).
-        target_lang: Target language code.
-        on_page_done: ``callback(page_num, total_pages, original_html, translated_html)``
-
-    Returns:
-        List of dicts ``{"page", "original_html", "translated_html"}``.
-    """
+    """HTML 문서를 페이지별로 동시 API 호출로 번역한다."""
     lang_pair = {"ko": "Korean", "en": "English"}
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
@@ -390,7 +373,7 @@ def translate_html(
     target_lang: str = "en",
     on_progress: Optional[Callable] = None,
 ) -> str:
-    """Translate an entire HTML document in one pass (legacy)."""
+    """HTML 문서 전체를 한 번에 번역한다 (레거시)."""
     lang_pair = {"ko": "Korean", "en": "English"}
     src = lang_pair.get(source_lang, source_lang)
     tgt = lang_pair.get(target_lang, target_lang)
@@ -434,17 +417,7 @@ def translate_text_chunks(
     target_lang: str = "en",
     on_chunk_done: Optional[Callable[[int, int, str], None]] = None,
 ) -> str:
-    """Translate plain text in chunks, returning the full translated text.
-
-    Args:
-        text: Source text to translate.
-        source_lang: Source language code.
-        target_lang: Target language code.
-        on_chunk_done: ``callback(chunk_index, total_chunks, translated_text)``
-
-    Returns:
-        Full translated text.
-    """
+    """일반 텍스트를 청크 단위로 번역하여 전체 번역 텍스트를 반환한다."""
     # Split into chunks at paragraph boundaries
     paragraphs = text.split("\n")
     chunks: list[str] = []

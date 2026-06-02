@@ -25,35 +25,11 @@ logger = get_logger(__name__)
 
 
 class PDFTableSearch:
-    """Efficient PDF table search with reusable model and vector store.
-
-    Loads the SentenceTransformer model once during initialization,
-    allowing multiple searches without reloading the model each time.
-
-    Args:
-        model_name: SentenceTransformers model name to use.
-            Defaults to ``distiluse-base-multilingual-cased-v2``.
-        chroma_persist_dir: Directory for ChromaDB persistence.
-            Defaults to ``./.chroma``.
-        device: Device to run on (``cpu`` or ``cuda``).
-            Defaults to ``cpu``.
-
-    Example::
-
-        from pdftablesearch import PDFTableSearch
-
-        # Initialize once (loads model)
-        searcher = PDFTableSearch()
-
-        # Multiple searches without reloading model
-        results1 = searcher.search("report.pdf", "revenue")
-        results2 = searcher.search("report.pdf", "expenses")
-
-        # Multi-document search
-        results3 = searcher.search_many(
-            ["doc1.pdf", "doc2.pdf"],
-            "annual growth"
-        )
+    """
+    재사용 모델과 벡터 저장소를 활용한 효율적인 PDF 표 검색 클래스.
+    
+    ``SentenceTransformer`` 임베딩 모델을 한 번만 로드하여
+    여러 검색에 재사용한다.
     """
 
     def __init__(
@@ -95,21 +71,7 @@ class PDFTableSearch:
         use_hybrid: bool = True,
         reset_vector_store: bool = False,
     ) -> List[TableSearchResult]:
-        """Search for tables in a single PDF document.
-
-        Args:
-            pdf_path: Path to the PDF file.
-            query: Natural language search query (Korean or English).
-            max_results: Maximum number of results to return.
-            use_llm_rerank: Whether to apply LLM-based re-ranking.
-            output_dir: Optional override for PDF conversion output.
-            use_hybrid: Whether to use hybrid mode for better table extraction.
-            reset_vector_store: Whether to reset vector store before searching.
-                Defaults to False (preserves existing data).
-
-        Returns:
-            List of :class:`TableSearchResult` objects sorted by relevance.
-        """
+        """단일 PDF 문서에서 표를 검색한다."""
         logger.info(
             "Searching in %s for: %s (hybrid=%s, reset=%s)",
             pdf_path,
@@ -144,7 +106,7 @@ class PDFTableSearch:
             logger.info("Loaded %d tables from %s", len(documents), pdf_path)
 
         # Build vector index and search
-        from pdftablesearch.vectorstore import TableVectorStore
+        from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
@@ -187,20 +149,7 @@ class PDFTableSearch:
         progress_callback: Optional = None,
         use_hybrid: bool = True,
     ) -> MultiDocumentSearchResult:
-        """Search for tables across multiple PDF documents.
-
-        Args:
-            pdf_paths: List of PDF file paths.
-            query: Natural language search query.
-            max_total_results: Maximum total results across all documents.
-            max_results_per_doc: Maximum results per individual document.
-            use_llm_rerank: Whether to use LLM re-ranking.
-            progress_callback: Optional progress callback.
-            use_hybrid: Whether to use hybrid mode for better table extraction.
-
-        Returns:
-            :class:`MultiDocumentSearchResult` with aggregated results.
-        """
+        """여러 PDF 문서에서 표를 검색한다."""
         logger.info(
             "Multi-document search: %d PDFs, query='%s' (hybrid=%s)",
             len(pdf_paths),
@@ -229,7 +178,7 @@ class PDFTableSearch:
         logger.info("Loaded %d total tables from %d documents", len(all_documents), len(pdf_paths))
 
         # Build vector index
-        from pdftablesearch.vectorstore import TableVectorStore
+        from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
@@ -257,7 +206,7 @@ class PDFTableSearch:
     def _format_search_results(
         self, search_results: List[tuple[Document, float]]
     ) -> List[TableSearchResult]:
-        """Convert raw vector search results to TableSearchResult objects."""
+        """벡터 검색 원시 결과를 ``TableSearchResult`` 객체로 변환한다."""
         results: List[TableSearchResult] = []
 
         for doc, score in search_results:
@@ -271,7 +220,7 @@ class PDFTableSearch:
     def _apply_per_doc_limit(
         self, results: List[TableSearchResult], max_per_doc: int
     ) -> List[TableSearchResult]:
-        """Apply per-document result limit while preserving ranking."""
+        """순위를 유지하면서 문서당 결과 제한을 적용한다."""
         doc_counts: dict[str, int] = {}
         filtered: List[TableSearchResult] = []
 
@@ -286,13 +235,13 @@ class PDFTableSearch:
         return filtered
 
     def clear_cache(self) -> None:
-        """Clear the cached documents."""
+        """캐시된 문서를 초기화한다."""
         self._cached_documents.clear()
         logger.info("Cleared document cache")
 
     def reset_vector_store(self) -> None:
-        """Delete the vector store and all its data."""
-        from pdftablesearch.vectorstore import TableVectorStore
+        """벡터 저장소와 모든 데이터를 삭제한다."""
+        from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
@@ -307,16 +256,8 @@ class PDFTableSearch:
     # -----------------------------------------------------------------------
 
     def get_vector_store_stats(self) -> dict:
-        """Get statistics about the current vector store.
-
-        Returns:
-            Dictionary with keys:
-            - document_count: Number of documents in the store
-            - collection_name: Name of the ChromaDB collection
-            - persist_dir: Directory where data is stored
-            - loaded_pdfs: Set of PDF names currently loaded
-        """
-        from pdftablesearch.vectorstore import TableVectorStore
+        """현재 벡터 저장소 통계를 반환한다."""
+        from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
@@ -339,16 +280,8 @@ class PDFTableSearch:
             }
 
     def list_stored_tables(self) -> List[dict]:
-        """List all tables currently stored in the vector store.
-
-        Returns:
-            List of dictionaries, each containing:
-            - table_id: Table identifier
-            - page_number: Page number
-            - document_name: Document filename
-            - content_preview: First 200 characters of table content
-        """
-        from pdftablesearch.vectorstore import TableVectorStore
+        """벡터 저장소에 저장된 모든 표를 나열한다."""
+        from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
@@ -390,40 +323,7 @@ class PDFTableSearch:
         api_key: Optional[str] = None,
         fallback_to_vector: bool = True,
     ) -> TableSearchResult:
-        """Search for the single most relevant table using vector + LLM.
-
-        Combines vector similarity search with LLM-based table selection.
-        Retrieves ``top_k`` candidates via vector search, then sends them
-        to the LLM to pick the best match.
-
-        Falls back to the top vector result if the LLM fails and
-        ``fallback_to_vector`` is ``True``.
-
-        Args:
-            pdf_path: Path to the PDF document.
-            query: Natural language search query (Korean or English).
-            top_k: Number of vector search candidates for LLM evaluation.
-                Default 20.
-            llm_model: LLM model name (``glm-5.1``, ``glm-5.0``).
-            api_key: z.ai API key.  Falls back to ``ZAI_API_KEY`` env var.
-            fallback_to_vector: If ``True``, return vector search #1
-                when the LLM fails.
-
-        Returns:
-            Single :class:`TableSearchResult` with the highest relevance.
-
-        Raises:
-            TableSearchError: If both vector search and LLM fail, or if
-                LLM fails and fallback is disabled.
-
-        Example::
-
-            searcher = PDFTableSearch()
-            result = searcher.smart_search(
-                pdf_path="report.pdf",
-                query="포괄손익계산서",
-            )
-        """
+        """벡터 + LLM으로 가장 관련성 높은 표 하나를 검색한다."""
         from pdftablesearch.smart_search import smart_search as _smart_search
 
         return _smart_search(
@@ -439,14 +339,7 @@ class PDFTableSearch:
         )
 
     def inspect_vector_store(self) -> None:
-        """Print detailed information about the vector store to console.
-
-        Displays:
-        - Document count
-        - Loaded PDFs
-        - Cached documents
-        - All stored tables with preview
-        """
+        """벡터 저장소 상세 정보를 콘솔에 출력한다."""
         stats = self.get_vector_store_stats()
 
         print("=" * 60)

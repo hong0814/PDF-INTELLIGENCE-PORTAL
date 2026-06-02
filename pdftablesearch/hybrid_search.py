@@ -1,10 +1,9 @@
-"""Hybrid search combining BM25 keyword matching with vector similarity.
+"""하이브리드 검색 — BM25 키워드 매칭 + 벡터 유사도 결합.
 
-Uses Reciprocal Rank Fusion (RRF) to merge results from both retrieval
-methods, providing better recall for exact matches (numbers, proper nouns)
-while retaining semantic understanding from vector search.
+Reciprocal Rank Fusion (RRF)으로 두 검색 결과를 병합하여
+정확한 매칭(숫자, 고유명사)과 의미적 이해를 동시에 제공한다.
 
-Usage::
+사용법::
 
     from pdftablesearch.hybrid_search import hybrid_search
 
@@ -25,7 +24,7 @@ from pdftablesearch.utils import get_logger
 
 logger = get_logger(__name__)
 
-_RRF_K = 60  # RRF constant (standard value from original paper)
+_RRF_K = 60  # RRF 상수 (원논문 표준값)
 
 
 def _bm25_search(
@@ -33,10 +32,7 @@ def _bm25_search(
     query: str,
     k: int = 20,
 ) -> List[tuple[Document, int]]:
-    """Simple keyword-based search using token overlap scoring.
-
-    Returns up to *k* (Document, rank) tuples sorted by relevance.
-    """
+    """토큰 오버랩 기반 키워드 검색. 최대 *k*개의 (Document, rank) 튜플을 반환한다."""
     query_tokens = set(query.lower().split())
     if not query_tokens:
         return [(doc, idx + 1) for idx, doc in enumerate(documents[:k])]
@@ -63,10 +59,10 @@ def _rrf_merge(
     vector_results: List[tuple[Document, float]],
     k: int = _RRF_K,
 ) -> List[Document]:
-    """Merge BM25 and vector results using Reciprocal Rank Fusion.
+    """Reciprocal Rank Fusion으로 BM25/벡터 결과를 병합한다.
 
-    Each document's RRF score = ``sum(1 / (k + rank))`` across both
-    result lists.  Documents appearing in both lists get higher scores.
+    각 문서의 RRF 점수 = ``sum(1 / (k + rank))``.
+    두 결과에 모두 등장하는 문서가 더 높은 점수를 받는다.
     """
     rrf_scores: dict[str, float] = {}
     doc_map: dict[str, Document] = {}
@@ -95,22 +91,22 @@ def hybrid_search(
     output_dir: Optional[str] = None,
     chroma_persist_dir: str = "./.chroma",
 ) -> List[TableSearchResult]:
-    """Search combining BM25 keyword matching and vector similarity.
+    """BM25 키워드 매칭 + 벡터 유사도를 결합한 검색.
 
-    Args:
-        query: Natural language search query.
-        pdf_path: Path to the PDF document.
-        max_results: Maximum number of results.
-        use_hybrid: Whether to use hybrid PDF processing.
-        output_dir: Optional output directory override.
-        chroma_persist_dir: ChromaDB persistence directory.
+    매개변수:
+        query: 자연어 검색 쿼리.
+        pdf_path: PDF 문서 경로.
+        max_results: 최대 결과 수.
+        use_hybrid: 하이브리드 PDF 처리 사용 여부.
+        output_dir: 출력 디렉토리 오버라이드.
+        chroma_persist_dir: ChromaDB 영속 디렉토리.
 
-    Returns:
-        List of :class:`TableSearchResult` sorted by fused relevance.
+    반환:
+        RRF 융합 점수로 정렬된 :class:`TableSearchResult` 목록.
     """
     from pdftablesearch.loader import PDFProcessor
     from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
-    from pdftablesearch.vectorstore import TableVectorStore
+    from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
     logger.info("Hybrid search: query='%s', pdf='%s'", query[:50], pdf_path)
 
