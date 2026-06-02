@@ -89,7 +89,7 @@ def hybrid_search(
     max_results: int = 5,
     use_hybrid: bool = True,
     output_dir: Optional[str] = None,
-    chroma_persist_dir: str = "./.chroma",
+    persist_dir: str = "./.chroma",
 ) -> List[TableSearchResult]:
     """BM25 키워드 매칭 + 벡터 유사도를 결합한 검색.
 
@@ -99,7 +99,7 @@ def hybrid_search(
         max_results: 최대 결과 수.
         use_hybrid: 하이브리드 PDF 처리 사용 여부.
         output_dir: 출력 디렉토리 오버라이드.
-        chroma_persist_dir: ChromaDB 영속 디렉토리.
+        persist_dir: 벡터 스토어 데이터 디렉토리.
 
     반환:
         RRF 융합 점수로 정렬된 :class:`TableSearchResult` 목록.
@@ -120,7 +120,7 @@ def hybrid_search(
     bm25_results = _bm25_search(documents, query, k=max_results * 3)
 
     embeddings = SentenceTransformerEmbeddings()
-    vector_store = TableVectorStore(embeddings=embeddings, persist_dir=chroma_persist_dir)
+    vector_store = TableVectorStore(embeddings=embeddings, persist_dir=persist_dir)
     vector_store.add_documents(documents)
     vector_results = vector_store.similarity_search(query=query, k=max_results * 3)
 

@@ -47,7 +47,7 @@ def search_tables(
     max_results: int = 5,
     max_results_per_doc: Optional[int] = None,
     use_llm_rerank: bool = False,
-    chroma_persist_dir: str = "./.chroma",
+    persist_dir: str = "./.chroma",
     output_dir: Optional[str] = None,
     progress_callback: Optional[Callable[..., None]] = None,
     filters: Optional[Dict[str, Any]] = None,
@@ -65,7 +65,7 @@ def search_tables(
             query=query,
             max_results=max_results,
             use_llm_rerank=use_llm_rerank,
-            chroma_persist_dir=chroma_persist_dir,
+            persist_dir=persist_dir,
             output_dir=output_dir,
         )
         if filters:
@@ -78,7 +78,7 @@ def search_tables(
             max_total_results=max_results,
             max_results_per_doc=max_results_per_doc,
             use_llm_rerank=use_llm_rerank,
-            chroma_persist_dir=chroma_persist_dir,
+            persist_dir=persist_dir,
             progress_callback=progress_callback,
         )
 
@@ -92,7 +92,7 @@ def _search_single(
     query: str,
     max_results: int = 5,
     use_llm_rerank: bool = False,
-    chroma_persist_dir: str = "./.chroma",
+    persist_dir: str = "./.chroma",
     output_dir: Optional[str] = None,
 ) -> List[TableSearchResult]:
     """
@@ -127,7 +127,7 @@ def _search_single(
     embeddings = SentenceTransformerEmbeddings()
     vector_store = TableVectorStore(
         embeddings=embeddings,
-        persist_dir=chroma_persist_dir,
+        persist_dir=persist_dir,
     )
     vector_store.add_documents(documents)
 
@@ -162,7 +162,7 @@ def _search_multi(
     max_total_results: int = 20,
     max_results_per_doc: Optional[int] = None,
     use_llm_rerank: bool = False,
-    chroma_persist_dir: str = "./.chroma",
+    persist_dir: str = "./.chroma",
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> MultiDocumentSearchResult:
     """
@@ -196,7 +196,7 @@ def _search_multi(
     embeddings = SentenceTransformerEmbeddings()
     vector_store = TableVectorStore(
         embeddings=embeddings,
-        persist_dir=chroma_persist_dir,
+        persist_dir=persist_dir,
     )
     vector_store.reset()  # Start fresh for multi-doc search
     vector_store.add_documents(all_documents)
@@ -339,7 +339,7 @@ def _format_search_results(
         result = TableSearchResult.from_langchain_document(doc, score)
         results.append(result)
 
-    # Sort by relevance score ascending (lower ChromaDB distance = better)
+    # Sort by relevance score ascending (lower 벡터 거리 = better)
     # and then reverse so best results come first
     results.sort(key=lambda r: r.relevance_score or float("inf"))
     return results

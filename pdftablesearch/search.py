@@ -35,11 +35,11 @@ class PDFTableSearch:
     def __init__(
         self,
         model_name: str = "distiluse-base-multilingual-cased-v2",
-        chroma_persist_dir: str = "./.chroma",
+        persist_dir: str = "./.chroma",
         device: str = "cpu",
     ) -> None:
         self.model_name = model_name
-        self.chroma_persist_dir = chroma_persist_dir
+        self._persist_dir = persist_dir
         self.device = device
 
         logger.info("Initializing PDFTableSearch with model: %s", model_name)
@@ -110,7 +110,7 @@ class PDFTableSearch:
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
-            persist_dir=self.chroma_persist_dir,
+            persist_dir=self._persist_dir,
         )
 
         # Only add documents if not already in vector store
@@ -182,7 +182,7 @@ class PDFTableSearch:
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
-            persist_dir=self.chroma_persist_dir,
+            persist_dir=self._persist_dir,
         )
         vector_store.reset()  # Start fresh
         vector_store.add_documents(all_documents)
@@ -245,7 +245,7 @@ class PDFTableSearch:
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
-            persist_dir=self.chroma_persist_dir,
+            persist_dir=self._persist_dir,
         )
         vector_store.reset()
         self._loaded_pdfs.clear()
@@ -261,7 +261,7 @@ class PDFTableSearch:
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
-            persist_dir=self.chroma_persist_dir,
+            persist_dir=self._persist_dir,
         )
 
         try:
@@ -274,7 +274,7 @@ class PDFTableSearch:
             return {
                 "document_count": 0,
                 "collection_name": "N/A",
-                "persist_dir": self.chroma_persist_dir,
+                "persist_dir": self._persist_dir,
                 "loaded_pdfs": [],
                 "cached_documents": [],
             }
@@ -285,7 +285,7 @@ class PDFTableSearch:
 
         vector_store = TableVectorStore(
             embeddings=self.embeddings,
-            persist_dir=self.chroma_persist_dir,
+            persist_dir=self._persist_dir,
         )
 
         try:
@@ -335,7 +335,7 @@ class PDFTableSearch:
             use_hybrid=True,
             output_dir=None,
             fallback_to_vector=fallback_to_vector,
-            chroma_persist_dir=self.chroma_persist_dir,
+            persist_dir=self._persist_dir,
         )
 
     def inspect_vector_store(self) -> None:

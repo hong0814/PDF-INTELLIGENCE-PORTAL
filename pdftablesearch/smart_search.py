@@ -83,7 +83,7 @@ def smart_search(
     use_hybrid: bool = True,
     output_dir: Optional[str] = None,
     fallback_to_vector: bool = True,
-    chroma_persist_dir: str = "./.chroma",
+    persist_dir: str = "./.chroma",
     progress_callback: Optional[Callable] = None,
 ) -> TableSearchResult:
     """벡터 검색 + LLM으로 가장 관련성 높은 표 하나를 찾는다.
@@ -112,7 +112,7 @@ def smart_search(
         top_k=top_k,
         use_hybrid=use_hybrid,
         output_dir=output_dir,
-        chroma_persist_dir=chroma_persist_dir,
+        persist_dir=persist_dir,
     )
 
     if not candidates_results:
@@ -195,7 +195,7 @@ def _run_vector_search(
     top_k: int,
     use_hybrid: bool,
     output_dir: Optional[str],
-    chroma_persist_dir: str,
+    persist_dir: str,
 ) -> List[TableSearchResult]:
     """smart_search의 벡터 검색 단계를 실행한다.
 
@@ -204,7 +204,7 @@ def _run_vector_search(
     from pdftablesearch.search import PDFTableSearch
 
     try:
-        searcher = PDFTableSearch(chroma_persist_dir=chroma_persist_dir)
+        searcher = PDFTableSearch(persist_dir=persist_dir)
 
         results = searcher.search(
             pdf_path=pdf_path,

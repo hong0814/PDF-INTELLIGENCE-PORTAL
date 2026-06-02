@@ -39,7 +39,7 @@ def ask_table(
     api_key: Optional[str] = None,
     use_hybrid: bool = True,
     output_dir: Optional[str] = None,
-    chroma_persist_dir: str = "./.chroma",
+    persist_dir: str = "./.chroma",
 ) -> str:
     """가장 관련성 높은 표를 활용하여 자연어 질문에 답변한다.
 
@@ -53,7 +53,7 @@ def ask_table(
         api_key: z.ai API 키.
         use_hybrid: 하이브리드 PDF 처리 사용 여부.
         output_dir: 출력 디렉토리 오버라이드.
-        chroma_persist_dir: ChromaDB 영속 디렉토리.
+        persist_dir: 벡터 스토어 데이터 디렉토리.
 
     반환:
         한국어 답변 문자열.
@@ -68,7 +68,7 @@ def ask_table(
         api_key=api_key,
         use_hybrid=use_hybrid,
         output_dir=output_dir,
-        chroma_persist_dir=chroma_persist_dir,
+        persist_dir=persist_dir,
     )
 
     table_html = table.table_html or table.table_markdown or ""

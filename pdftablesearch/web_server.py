@@ -1,8 +1,5 @@
 """FastAPI web server for PDFTableSearch React frontend.
 
-Session-based API that replaces the Streamlit app. Each user session gets
-its own temporary upload directory and ChromaDB persist directory.
-
 Run with::
 
     uvicorn pdftablesearch.web_server:app --reload --port 8000
@@ -81,7 +78,7 @@ async def lifespan(application: FastAPI):
     # Clean up stale temp directories from previous runs
     import glob as _glob
     import shutil
-    for pattern in ["pdf_upload_*", "pdf_chroma_*", "pdf_docchunks_*"]:
+    for pattern in ["pdf_upload_*", "pdf_data_*", "pdf_docchunks_*"]:
         for d in _glob.glob(os.path.join(tempfile.gettempdir(), pattern)):
             try:
                 shutil.rmtree(d, ignore_errors=True)
@@ -496,11 +493,11 @@ async def create_session(body: CreateSessionRequest, request: Request) -> JSONRe
     session_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
-    chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
+    data_dir = tempfile.mkdtemp(prefix="pdf_data_")
 
     session: Dict[str, Any] = {
         "upload_dir": upload_dir,
-        "chroma_dir": chroma_dir,
+        "data_dir": data_dir,
         "pdfs": {},
         "searcher": None,
         "name": body.name or "",
@@ -550,11 +547,11 @@ async def delete_session(session_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Session not found")
     session = _sessions.pop(session_id)
     upload_dir = session.get("upload_dir")
-    chroma_dir = session.get("chroma_dir")
+    data_dir = session.get("data_dir")
     if upload_dir:
         shutil.rmtree(upload_dir, ignore_errors=True)
-    if chroma_dir:
-        shutil.rmtree(chroma_dir, ignore_errors=True)
+    if data_dir:
+        shutil.rmtree(data_dir, ignore_errors=True)
     return JSONResponse(content={"deleted": session_id})
 
 
@@ -1006,14 +1003,14 @@ async def upload_pdfs(
     if session_id in _sessions:
         session = _sessions[session_id]
         upload_dir = session["upload_dir"]
-        chroma_dir = session["chroma_dir"]
+        data_dir = session["data_dir"]
     else:
         upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
-        chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
+        data_dir = tempfile.mkdtemp(prefix="pdf_data_")
         doc_chunks_dir = tempfile.mkdtemp(prefix="pdf_docchunks_")
         session: Dict[str, Any] = {
             "upload_dir": upload_dir,
-            "chroma_dir": chroma_dir,
+            "data_dir": data_dir,
             "doc_chunks_dir": doc_chunks_dir,
             "pdfs": {},
             "searcher": None,
@@ -1149,7 +1146,7 @@ async def upload_pdfs(
         embeddings = _get_embeddings()
         vector_store = TableVectorStore(
             embeddings=embeddings,
-            persist_dir=chroma_dir,
+            persist_dir=data_dir,
         )
         # Only reset if this is a fresh session (no existing PDFs before this upload)
         if not session_has_existing_pdfs:
@@ -1229,7 +1226,7 @@ async def search(
     session["search_count"] = session.get("search_count", 0) + 1
     start = time.time()
 
-    chroma_dir = session["chroma_dir"]
+    data_dir = session["data_dir"]
     if not session["pdfs"]:
         return JSONResponse(
             content={"results": [], "total": 0, "time_seconds": 0.0}
@@ -1239,7 +1236,7 @@ async def search(
         embeddings = _get_embeddings()
         vector_store = TableVectorStore(
             embeddings=embeddings,
-            persist_dir=chroma_dir,
+            persist_dir=data_dir,
         )
 
         search_results = vector_store.similarity_search(
@@ -1280,7 +1277,7 @@ async def smart_search_endpoint(
         first_pdf = next(iter(session["pdfs"].values()))
         pdf_path = first_pdf["path"]
 
-    chroma_dir = session["chroma_dir"]
+    data_dir = session["data_dir"]
     queue: list[str] = []
 
     def progress_callback(phase: str, message: str, pct: int) -> None:
@@ -1295,7 +1292,7 @@ async def smart_search_endpoint(
             embeddings = _get_embeddings()
             vector_store = TableVectorStore(
                 embeddings=embeddings,
-                persist_dir=chroma_dir,
+                persist_dir=data_dir,
             )
 
             progress_callback("vector", "벡터 검색 중...", 20)
@@ -1999,7 +1996,7 @@ async def unified_search_endpoint(
             progress_callback("vector", "문서 검색 중...", 20)
             table_store = TableVectorStore(
                 embeddings=embeddings,
-                persist_dir=session["chroma_dir"],
+                persist_dir=session["data_dir"],
             )
             table_results = table_store.similarity_search(query=body.query, k=15)
 

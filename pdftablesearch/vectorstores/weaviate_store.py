@@ -45,7 +45,7 @@ class WeaviateTableVectorStore:
         collection_name: Optional[str] = None,
     ) -> None:
         self.embeddings = embeddings or SentenceTransformerEmbeddings()
-        self.persist_dir = persist_dir or os.getenv("CHROMA_PERSIST_DIR", "./.chroma")
+        self.persist_dir = persist_dir or os.getenv("WEAVIATE_DATA_DIR", "/tmp/weaviate-data")
         self.collection_name = collection_name or os.getenv(
             "CHROMA_COLLECTION_NAME",
             "pdf_tables",

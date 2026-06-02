@@ -14,7 +14,7 @@ PDFTableSearch - PDF 문서 내 표 의미 검색 라이브러리.
         print(f"Page {table.page_number}: {table.table_id}")
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from pdftablesearch.search import PDFTableSearch
 from pdftablesearch.core import search_tables

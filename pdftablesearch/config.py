@@ -32,11 +32,6 @@ class Settings(BaseSettings):
     local_embedding_model: str = "BAAI/bge-m3"
     embedding_device: str = "cpu"
 
-    # -- ChromaDB ------------------------------------------------------------
-
-    chroma_persist_dir: str = "./.chroma"
-    chroma_collection_name: str = "pdf_tables"
-
     # -- 처리 설정 -----------------------------------------------------------
 
     max_file_size_mb: int = 100
@@ -102,7 +97,7 @@ class Settings(BaseSettings):
 
     # -- 벡터 스토어 백엔드 --------------------------------------------------
 
-    vector_backend: str = "chroma"
+    vector_backend: str = "weaviate"
 
     model_config = SettingsConfigDict(
         env_file=".env",

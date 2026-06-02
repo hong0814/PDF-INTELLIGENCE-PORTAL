@@ -126,7 +126,7 @@ class VectorIndexError(TableSearchError):
 
     일반적인 원인:
         - 임베딩 생성 실패
-        - ChromaDB 초기화 실패
+        - 벡터스토어 초기화 실패
         - 문서 삽입 실패
     """
 
@@ -138,7 +138,7 @@ class VectorSearchError(TableSearchError):
 
     일반적인 원인:
         - 쿼리 임베딩 생성 실패
-        - ChromaDB 쿼리 실패
+        - 벡터스토어 쿼리 실패
         - 빈 인덱스 또는 손상된 인덱스
     """
 
