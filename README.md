@@ -1,223 +1,57 @@
 # PDF Intelligence Portal
 
-PDF 문서에서 표와 텍스트를 통합 검색하고, AI 기반 질의응답을 통해 문서를 분석하는 웹 애플리케이션입니다.
-
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev/)
-[![LangChain](https://img.shields.io/badge/langchain-0.1.0-green.svg)](https://github.com/langchain-ai/langchain)
-[![ChromaDB](https://img.shields.io/badge/ChromaDB-0.4.0-orange.svg)](https://www.trychroma.com/)
+[![Weaviate](https://img.shields.io/badge/Weaviate-1.30+-FF6B6B.svg)](https://weaviate.io/)
 [![Ollama](https://img.shields.io/badge/Ollama-gpt--oss:120b-purple.svg)](https://ollama.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## 목차
-
-- [개요](#-개요)
-- [주요 기능](#-주요-기능)
-- [시스템 아키텍처](#-시스템-아키텍처)
-- [화면 구성](#-화면-구성)
-- [빠른 시작](#-빠른-시작)
-- [상세 실행 방법](#-상세-실행-방법)
-- [프로젝트 구조](#-프로젝트-구조)
-- [기술 스택](#-기술-스택)
-- [트러블슈팅](#-트러블슈팅)
-- [라이선스](#-라이선스)
-
----
-
-## 개요
-
-**PDF Intelligence Portal**은 금융 문서(신용심사, PF대출, 재무제표 등)를 업로드하고 자연어로 검색할 수 있는 AI 기반 문서 분석 도구입니다. 기존의 단순 키워드 검색을 넘어, **의미적 검색 + LLM 기반 질의응답**을 통해 문서 내용을 정확하게 파악할 수 있습니다.
-
-### 왜 PDF Intelligence Portal인가요?
-
-| 특징 | 설명 |
-|------|------|
-| **통합 문서 검색** | 표와 텍스트를 동시에 검색하여 하나의 AI 답변으로 종합 |
-| **의미적 검색** | 단순 키워드 매칭이 아닌 문맥을 이해하고 검색 |
-| **출처 팝업** | 답변의 출처를 클릭하면 실제 PDF 페이지를 렌더링하여 해당 텍스트를 하이라이트 |
-| **후속 질문** | 검색 결과에 대해 추가 질문을 통해 심층 분석 가능 |
-| **다중 문서 지원** | 여러 PDF를 동시에 업로드하고 선택적으로 검색 |
-| **한국어 완벽 지원** | 한국어 질문과 문서를 완벽하게 처리 |
-| **세션 관리** | 여러 세션을 생성하고 전환하며 독립적인 작업 환경 유지 |
+금융 문서(신용심사, PF대출, 재무제표 등)를 업로드하고 자연어로 검색하는 AI 기반 문서 분석 포털입니다. 의미적 검색 + LLM 질의응답 + LDAP 인증을 통합 제공합니다.
 
 ---
 
 ## 주요 기능
 
-### 1. 문서 검색 (Unified Search)
-
-표와 텍스트를 **동시에 검색**하여 AI가 종합적인 답변을 생성합니다. ChromaDB 벡터 검색 + BM25 키워드 검색을 RRF(Rank Reciprocal Fusion)로 결합하여 높은 정확도를 달성합니다.
-
-- **하이브리드 검색**: 벡터 유사도 검색 + BM25 키워드 검색 → RRF Fusion
-- **AI 답변**: LLM이 관련 표와 텍스트를 종합하여 한국어 답변 생성 (SSE 스트리밍)
-- **출처 인용**: `[텍스트출처N]`, `[표출처N]` 마커로 답변 근거를 명확히 표시
-- **출처 팝업**: 출처 클릭 시 실제 PDF 페이지를 렌더링하고 매칭된 텍스트를 하이라이트 (6단계 폴백 매칭)
-- **관련 표**: 답변과 관련된 표를 인라인으로 렌더링, CSV 다운로드 지원
-- **후속 질문**: 이전 검색 컨텍스트를 유지한 채 추가 질문 가능
-
-### 2. 문서 보기 (Document Viewer)
-
-업로드된 PDF를 페이지 단위로 열람할 수 있습니다. pdf.js를 사용한 고화질 렌더링과 함께, 추출된 표의 위치를 오버레이로 표시합니다.
-
-- PyMuPDF + opendataloader-pdf 이중 감지로 높은 표 인식률
-- 동적 페이지 크기 적용 (A4 외 다양한 페이지 크기 지원)
-- Hybrid bbox 우선 사용으로 정확한 표 경계 표시
-- 표 클릭 시 CSV 다운로드
-
-### 3. 표 검색 (Table Search)
-
-PDF 문서에서 추출된 표를 의미적으로 검색합니다. ChromaDB 벡터 데이터베이스와 로컬 임베딩 모델을 사용하여 관련성 높은 표를 찾아줍니다.
-
-**Smart Search 모드**: 검색된 여러 표 중 AI(LLM)가 가장 관련성 높은 표 하나를 자동으로 선택해 보여줍니다.
-
-### 4. 기업금융심사 (Credit Review)
-
-PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스트와 함께 확인할 수 있는 특화 뷰입니다. 금융 문서의 시각적 데이터를 효율적으로 검토할 수 있습니다.
-
-### 5. 세션 관리
-
-- **세션 생성/전환/삭제**: 여러 독립적인 작업 환경을 관리
-- **검색 기록 유지**: 세션을 전환해도 각 세션의 검색 결과와 대화 기록이 localStorage에 보존
-- **PDF 선택 필터링**: 여러 PDF 중 원하는 문서만 선택하여 검색 범위 제한
+| 기능 | 설명 |
+|------|------|
+| **통합 문서 검색** | 표 + 텍스트를 동시에 검색하여 AI가 종합 답변 생성 (SSE 스트리밍) |
+| **의미적 검색** | Weaviate hybrid search (벡터 + 키워드) + BM25 + RRF Fusion |
+| **출처 팝업** | 답변 출처 클릭 시 실제 PDF 페이지 렌더링 + 하이라이트 |
+| **LDAP 인증** | 기업 LDAP 서버 연동, JWT httpOnly 쿠키 인증 |
+| **PII 마스킹** | 주민번호, 계좌번호, 전화번호 등 개인정보 자동 마스킹 |
+| **다중 문서** | 여러 PDF를 동시에 업로드하고 선택적으로 검색 |
+| **세션 관리** | 독립적인 작업 환경 관리, 검색 기록 보존 |
 
 ---
 
-## 시스템 아키텍처
+## 아키텍처
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        사용자 (Browser)                          │
-│                  http://localhost:8000                           │
-└──────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                    React Frontend (Vite + TypeScript)            │
-│                                                                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
-│  │ Main     │ │ Document │ │ Unified  │ │ Credit   │           │
-│  │ Screen   │ │ Viewer   │ │ Search   │ │ Review   │           │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
-│                                                                  │
-│  State Management: Zustand (useAppStore)                        │
-│  Styling: Tailwind CSS v4                                       │
-│  Markdown: react-markdown + remark-gfm + rehype-raw             │
-│  PDF Rendering: pdf.js 4.0 (CDN)                                │
-└──────────────────────────────────────────────────────────────────┘
-                                │ HTTP/SSE
-                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                  FastAPI Backend (Python 3.11)                   │
-│                                                                  │
-│  POST /api/upload            - PDF 업로드 & 테이블 추출          │
-│  POST /api/search            - 표 검색 (벡터 유사도)             │
-│  POST /api/smart-search      - AI 표 선택 검색 (SSE)            │
-│  POST /api/unified-search    - 통합 문서 검색 (SSE)              │
-│  POST /api/unified-followup  - 후속 질문 (SSE)                  │
-│  POST /api/ask-document      - 문서 QA (RAG + LLM, SSE)         │
-│  POST /api/qa                - 표 Q&A (SSE)                     │
-│  GET/POST/DELETE /api/sessions - 세션 관리                       │
-│  GET  /api/documents/*       - PDF/HTML/이미지 서빙              │
-│                                                                  │
-│  Session Storage: In-Memory Dict (tempfile 기반)                │
-└──────────────────────────────────────────────────────────────────┘
-                                │
-            ┌───────────────────┼───────────────────┐
-            ▼                   ▼                   ▼
-┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
-│ opendataloader-pdf│ │ SentenceTransformers│ │  ChromaDB         │
-│ (PDF → HTML/JSON) │ │ (로컬 임베딩)       │ │ (벡터 저장소)     │
-│                   │ │ BAAI/bge-m3        │ │                   │
-│ Hybrid Mode:      │ │                    │ │ pdf_tables        │
-│ docling-fast       │ │                    │ │ doc_chunks        │
-│ (OCR 기반)        │ │                    │ │                   │
-└───────────────────┘ └───────────────────┘ └───────────────────┘
-            │                    │                    │
-            ▼                    ▼                    ▼
-┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
-│  PyMuPDF (fitz)   │ │  Ollama Cloud     │ │   BM25 Index       │
-│  표 감지 + bbox    │ │  gpt-oss:120b     │ │   (키워드 검색)    │
-│  동적 페이지 크기   │ │  (LLM 응답 생성)  │ │                   │
-└───────────────────┘ └───────────────────┘ └───────────────────┘
-```
-
-### 데이터 처리 파이프라인
-
-```
-PDF 업로드
-  → opendataloader-pdf 변환 (hybrid=docling-fast, OCR 지원)
-  → HTML 파일 생성 (페이지 구분자 포함)
-  → HTML에서 <table> 태그 추출 (BeautifulSoup)
-  → JSON 메타데이터 매칭 (페이지 번호, bounding box)
-  → PyMuPDF 표 감지 (find_tables) + hybrid 표 매칭
-    → PyMuPDF가 감지한 표 → hybrid HTML 매칭 → bbox는 hybrid 우선 사용
-    → PyMuPDF가 놓친 페이지 → hybrid 표를 fallback으로 복구
-  → 다중페이지 표 연결 감지 (chain detection)
-  → LangChain Document 생성 (table_html + metadata)
-  → SentenceTransformer 임베딩 (bge-m3, 로컬 CPU)
-  → ChromaDB 저장 (pdf_tables + doc_chunks 컬렉션)
-
-문서 청킹 (텍스트 검색용)
-  → HTML에서 표 제거 + 페이지 구분자로 분할
-  → RecursiveCharacterTextSplitter (1000자 청크)
-  → ChromaDB 저장 (doc_chunks 컬렉션)
-  → BM25 인덱스 생성 (한국어 토크나이징)
-```
-
-### 검색 플로우
-
-#### 통합 문서 검색 (Unified Search)
-```
-쿼리 → ChromaDB pdf_tables 검색 (k=10)     ─┐
-     → ChromaDB doc_chunks 검색 (k=10)      ─┤
-     → BM25 키워드 검색 (k=10)              ─┤
-                                                ├→ RRF Fusion
-     ← 상위 표/텍스트 결과 병합             ─┤
-                                                │
-     → LLM에 컨텍스트 전달 (gpt-oss:120b)   ─┘
-     → SSE 스트리밍으로 AI 답변 생성
-     → 출처 정보 + 관련 표 + 원본 텍스트 반환
-```
-
-#### 표 검색
-```
-쿼리 → SentenceTransformer 임베딩 → ChromaDB similarity search → 결과 반환
-(선택: Smart Search → 상위 20개 후보 → LLM이 최적 표 1개 선택)
-```
-
----
-
-## 화면 구성
-
-### 탭 구조
-
-| 탭 | 설명 |
-|---|---|
-| **메인** | PDF 업로드, 전체 문서 현황 대시보드 (문서 보기 / 문서 검색 카드) |
-| **문서 보기** | PDF 페이지 뷰어 + 테이블 오버레이 + 하이라이트 + CSV 다운로드 |
-| **문서 검색** | 표+텍스트 통합 검색 + AI 답변 + 출처 팝업 + 후속 질문 |
-| **기업금융심사** | 문서 내 이미지/차트 분석 뷰 |
-
-### UI 레이아웃
-
-```
-┌──────────┬───────────────────────────────────────────────────┐
-│          │  [탭 바: 메인 | 문서보기 | 문서검색 | 심사]        │
-│          ├───────────────────────────────────────────────────┤
-│ 사이드바 │                                                   │
-│          │  ┌─ 문서 검색 탭 ──────────────────────────────┐  │
-│ • 세션명  │  │ 🔍 검색바 (PDF 필터 칩)                      │  │
-│ • PDF목록 │  │                                              │  │
-│ • 업로드  │  │ 📋 AI 답변 카드                              │  │
-│ • 세션관리 │  │   • 마크다운 렌더링 (표/볼드/리스트)           │  │
-│          │  │   • [텍스트출처N] [표출처N] 인라인 칩          │  │
-│ • 초기화  │  │   • 관련 표 (펼치기/접기 + CSV 다운로드)      │  │
-│          │  │   • 출처 칩 (클릭 → PDF 팝업)                 │  │
-│          │  │                                              │  │
-│          │  │ 💬 후속 질문 입력바                            │  │
-│          │  └──────────────────────────────────────────────┘  │
-└──────────┴───────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     Browser (React 19)                       │
+│  Zustand · Tailwind v4 · pdf.js · react-markdown            │
+└──────────────┬──────────────────────────────────────────────┘
+               │ HTTP / SSE
+┌──────────────▼──────────────────────────────────────────────┐
+│                  FastAPI (:8000)                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
+│  │ auth.py  │ │ upload   │ │ search   │ │ qa       │       │
+│  │ LDAP+JWT │ │ pipeline │ │ pipeline │ │ pipeline │       │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
+└────┬──────────┬──────────┬──────────┬───────────────────────┘
+     │          │          │          │
+     ▼          ▼          ▼          ▼
+┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────┐
+│ LDAP    │ │ Weaviate│ │ Ollama  │ │ Opendataloader│
+│ :3890   │ │ :8079   │ │ Cloud   │ │ -PDF :5002   │
+│         │ │ (embed) │ │ gpt-oss │ │ docling-fast │
+└─────────┘ └─────────┘ └─────────┘ └──────────────┘
+                 │
+           ┌─────┴──────┐
+           │ bge-m3     │
+           │ 임베딩(CPU) │
+           └────────────┘
 ```
 
 ---
@@ -226,144 +60,107 @@ PDF 업로드
 
 ### 사전 요구사항
 
-- Python 3.11 이상
-- Node.js 18 이상
-- npm 9 이상
-- Ollama API 키 ([ollama.com](https://ollama.com) 가입)
+- Python 3.11+
+- Node.js 18+
+- OpenLDAP (인증 필요 시): `brew install openldap`
 
-### 5분 만에 실행하기
+### 설치 및 실행
 
 ```bash
 # 1. 저장소 클론
 git clone https://github.com/hong0814/PDF-INTELLIGENCE-PORTAL.git
 cd PDF-INTELLIGENCE-PORTAL
 
-# 2. Python 가상환경 설정
+# 2. Python 가상환경 + 패키지 설치
 python -m venv .venv
 source .venv/bin/activate
-
-# 3. Python 패키지 설치
 pip install -e .
 
-# 4. 하이브리드 변환 서버 시작 (OCR 지원)
-opendataloader-pdf-hybrid --port 5002 &
-
-# 5. 환경 변수 설정 (.env 파일)
+# 3. 환경 변수 설정 (.env)
 cat > .env << 'EOF'
-OLLAMA_API_KEY=your_ollama_api_key_here
+# LLM
 ZAI_LLM_ENDPOINT=https://ollama.com/v1
 ZAI_LLM_MODEL=gpt-oss:120b
+
+# LDAP
+LDAP_SERVER_URL=ldap://localhost:3890
+LDAP_BASE_DN=dc=pdfportal,dc=local
+LDAP_BIND_DN=cn=admin,dc=pdfportal,dc=local
+LDAP_BIND_PASSWORD=admin
+
+# Weaviate
+WEAVIATE_HOST=localhost
+WEAVIATE_PORT=8079
+WEAVIATE_GRPC_PORT=50050
+VECTOR_BACKEND=weaviate
+
+# Auth
+JWT_SECRET=dev-secret-change-me
+
+# CORS
+CORS_ORIGINS=http://localhost:8000,http://localhost:5173
 EOF
 
-# 6. 프론트엔드 빌드
-cd web
-npm install
-npm run build
-cd ..
+# 4. LDAP 서버 시작 (선택)
+bash scripts/ldap/start.sh
 
-# 7. 서버 실행
+# 5. 하이브리드 변환 서버 시작
+opendataloader-pdf-hybrid --port 5002 &
+
+# 6. 프론트엔드 빌드
+cd web && npm install && npm run build && cd ..
+
+# 7. FastAPI 서버 실행
 uvicorn pdftablesearch.web_server:app --reload --port 8000
 
-# 8. 브라우저에서 접속
+# 8. 접속
 open http://localhost:8000
 ```
 
+### LDAP 테스트 계정
+
+| 계정 | 비밀번호 | 역할 |
+|------|---------|------|
+| `123456` | `1234` | 일반 사용자 |
+| `admin` | `admin` | 관리자 |
+
 ---
 
-## 상세 실행 방법
+## 환경 변수
 
-### 1. 백엔드 설정
+### LLM
 
-#### 환경 변수
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `ZAI_LLM_ENDPOINT` | `https://ollama.com/v1` | Ollama API 엔드포인트 |
+| `ZAI_LLM_MODEL` | `gpt-oss:120b` | LLM 모델명 |
 
-`.env` 파일을 프로젝트 루트에 생성:
+### LDAP 인증
 
-```bash
-# Ollama LLM 설정
-OLLAMA_API_KEY=your_ollama_api_key_here
-ZAI_LLM_ENDPOINT=https://ollama.com/v1
-ZAI_LLM_MODEL=gpt-oss:120b
-```
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `LDAP_SERVER_URL` | `ldap://localhost:3890` | LDAP 서버 URL |
+| `LDAP_BASE_DN` | `dc=pdfportal,dc=local` | 검색 Base DN |
+| `LDAP_BIND_DN` | `cn=admin,dc=pdfportal,dc=local` | 관리자 바인드 DN |
+| `LDAP_BIND_PASSWORD` | `admin` | 관리자 비밀번호 |
+| `LDAP_USE_SSL` | `false` | SSL 사용 여부 |
 
-> 임베딩은 로컬 `BAAI/bge-m3` 모델을 사용하므로 별도 API 키가 필요하지 않습니다.
+### Weaviate
 
-#### LLM 모델 변경
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `WEAVIATE_HOST` | `localhost` | Weaviate 호스트 |
+| `WEAVIATE_PORT` | `8079` | HTTP 포트 |
+| `WEAVIATE_GRPC_PORT` | `50050` | gRPC 포트 |
+| `WEAVIATE_USE_EMBEDDED` | `true` | Embedded 모드 사용 |
+| `VECTOR_BACKEND` | `weaviate` | 벡터 DB 백엔드 (`weaviate` 또는 `chroma`) |
 
-Ollama 클라우드에서 제공하는 다양한 모델을 사용할 수 있습니다:
+### 인증
 
-```bash
-# 사용 가능한 모델 목록 확인
-curl -s https://ollama.com/api/tags \
-  -H "Authorization: Bearer $OLLAMA_API_KEY" | python3 -m json.tool
-```
-
-| 모델 | 크기 | 특징 |
-|------|------|------|
-| `gpt-oss:120b` | 65GB | 기본 모델, 사고( reasoning) 지원 |
-| `gemma4:31b` | 62GB | Google Gemma 4, 빠른 응답 |
-| `qwen3.5:397b` | 397GB | 최대급, 최고 품질 |
-| `deepseek-v4-flash` | 140GB | 빠른 추론 |
-
-모델 변경 시 `.env`에서 `ZAI_LLM_MODEL` 값을 수정하세요.
-
-#### 하이브리드 변환 서버
-
-OCR 기반의 고품질 PDF 변환을 위해 `docling-fast` 서버를 실행해야 합니다:
-
-```bash
-# 서버 시작 (백그라운드)
-opendataloader-pdf-hybrid --port 5002 &
-
-# 상태 확인
-curl http://localhost:5002/health
-```
-
-> 하이브리드 서버가 없으면 표준 변환 모드로 자동 폴백(fallback)됩니다. 표 인식률이 떨어질 수 있습니다.
-
-#### FastAPI 서버 실행
-
-```bash
-# 개발 모드 (자동 리로드)
-uvicorn pdftablesearch.web_server:app --reload --port 8000
-
-# 프로덕션 모드
-uvicorn pdftablesearch.web_server:app --host 0.0.0.0 --port 8000
-```
-
-서버가 시작되면 `http://localhost:8000/api/health` 에서 상태를 확인할 수 있습니다.
-
-### 2. 프론트엔드 설정
-
-```bash
-cd web
-
-# 의존성 설치
-npm install
-
-# 개발 서버 (HMR 지원)
-npm run dev
-
-# 프로덕션 빌드
-npm run build
-
-# 빌드 미리보기
-npm run preview
-```
-
-개발 모드(`npm run dev`)는 기본적으로 `http://localhost:5173`에서 실행되며, API 요청을 `localhost:8000`으로 프록시합니다.
-
-### 3. 전체 실행 (한 번에)
-
-```bash
-# 터미널 1: 하이브리드 서버
-opendataloader-pdf-hybrid --port 5002
-
-# 터미널 2: FastAPI 백엔드
-uvicorn pdftablesearch.web_server:app --reload --port 8000
-
-# 터미널 3: React 개발 서버 (선택)
-cd web && npm run dev
-```
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `JWT_SECRET` | `dev-secret-change-me` | JWT 서명 시크릿 |
+| `AUTH_ENABLED` | `true` | 인증 활성화 여부 |
 
 ---
 
@@ -371,135 +168,159 @@ cd web && npm run dev
 
 ```
 pdftablesearch/
-├── pdftablesearch/          # Python 백엔드 패키지
-│   ├── __init__.py          # 패키지 초기화, 퍼블릭 API
-│   ├── web_server.py        # FastAPI 웹 서버 (API 라우트, 통합 검색)
-│   ├── core.py              # 코어 검색 로직
-│   ├── search.py            # 검색 인터페이스
-│   ├── smart_search.py      # Smart Search (LLM 표 선택)
-│   ├── table_qa.py          # 표 기반 질의응답
-│   ├── vectorstore.py       # ChromaDB 벡터 저장소 래퍼
-│   ├── embedding_provider.py # 임베딩 제공자 인터페이스
-│   ├── local_embeddings.py  # 로컬 SentenceTransformer 임베딩
-│   ├── embeddings.py        # API 임베딩 (fallback)
-│   ├── llm_client.py        # Ollama LLM 클라이언트 (ChatOpenAI 호환)
-│   ├── hybrid_search.py     # 하이브리드 검색 (벡터 + BM25 + RRF)
-│   ├── reranker.py          # LLM 리랭킹
-│   ├── translation.py       # 문서 번역
-│   ├── config.py            # 설정 관리 (Ollama API 키, 모델)
-│   ├── models.py            # 데이터 모델
-│   ├── exceptions.py        # 커스텀 예외
-│   ├── utils.py             # 유틸리티
-│   └── loader/              # PDF 로딩 및 테이블 추출
-│       ├── __init__.py      # PDFProcessor
-│       ├── html_parser.py   # HTML 테이블 추출, Markdown 변환
-│       ├── json_parser.py   # JSON 메타데이터 파싱
-│       ├── markdown_parser.py # Markdown 테이블 파싱
-│       └── matcher.py       # HTML↔JSON 매칭
+├── pdftablesearch/                  # Python 백엔드
+│   ├── web_server.py                # FastAPI 서버 (API 라우트)
+│   ├── auth.py                      # LDAP + JWT 인증
+│   ├── config.py                    # 환경설정 (pydantic-settings)
+│   ├── core.py                      # 검색 오케스트레이션
+│   ├── search.py                    # PDFTableSearch
+│   ├── smart_search.py              # LLM 표 선택 검색
+│   ├── hybrid_search.py             # 벡터 + BM25 + RRF Fusion
+│   ├── table_utils.py               # 표 감지/매칭/병합
+│   ├── table_qa.py                  # 표 Q&A
+│   ├── doc_processing.py            # 문서 분할
+│   ├── llm_client.py                # Ollama LLM 클라이언트
+│   ├── pii_masking.py               # 개인정보 마스킹
+│   ├── translation.py               # 문서 번역
+│   ├── reranker.py                  # 리랭킹
+│   ├── ldap_server.py               # 로컬 OpenLDAP 래퍼
+│   ├── vectorstore.py               # ChromaDB (레거시)
+│   ├── vectorstores/                # Weaviate (현재 백엔드)
+│   │   ├── __init__.py              # 팩토리: create_vector_store()
+│   │   ├── weaviate_client.py       # embedded/local 연결
+│   │   ├── weaviate_store.py        # WeaviateTableVectorStore
+│   │   ├── weaviate_schema.py       # 컬렉션 스키마
+│   │   └── weaviate_server.py       # Embedded 서버 진입점
+│   └── loader/                      # PDF → HTML/JSON 변환
+│       ├── html_parser.py
+│       ├── json_parser.py
+│       ├── markdown_parser.py
+│       └── matcher.py
 │
-├── web/                     # React 프론트엔드
-│   ├── src/
-│   │   ├── App.tsx          # 메인 앱 컴포넌트
-│   │   ├── main.tsx         # 진입점
-│   │   ├── api/
-│   │   │   └── client.ts    # API 클라이언트 (SSE 스트리밍 포함)
-│   │   ├── store/
-│   │   │   └── useAppStore.ts # Zustand 상태 관리
-│   │   ├── types/
-│   │   │   └── index.ts     # TypeScript 타입 정의
-│   │   └── components/
-│   │       ├── UnifiedSearchView.tsx # 통합 문서 검색 (AI 답변 + 출처 팝업)
-│   │       ├── DocumentViewer.tsx    # PDF 페이지 뷰어 (pdf.js + 표 오버레이)
-│   │       ├── SearchBar.tsx         # 검색 입력창 (PDF 선택 필터)
-│   │       ├── SearchResults.tsx     # 표 검색 결과 목록
-│   │       ├── TableCard.tsx         # 개별 표 카드 (Q&A, CSV/HTML 다운로드)
-│   │       ├── ChatBubble.tsx        # QA 메시지 버블 + 출처 하이라이트
-│   │       ├── CreditReviewView.tsx  # 기업금융심사 (이미지 분석)
-│   │       ├── Sidebar.tsx           # 사이드바 (PDF 목록, 업로드)
-│   │       ├── TabBar.tsx            # 탭 네비게이션
-│   │       ├── MainScreen.tsx        # 메인 대시보드
-│   │       └── ProgressBar.tsx       # 진행 상태 표시
-│   ├── vite.config.ts       # Vite 설정 (프록시 등)
-│   └── package.json         # npm 의존성
+├── web/                             # React 프론트엔드
+│   └── src/
+│       ├── api/client.ts            # API 클라이언트 (SSE)
+│       ├── store/useAppStore.ts     # Zustand 상태관리
+│       ├── types/index.ts           # TypeScript 타입
+│       └── components/
+│           ├── LoginView.tsx         # LDAP 로그인
+│           ├── MainScreen.tsx        # 메인 대시보드
+│           ├── DocumentViewer.tsx    # PDF 뷰어
+│           ├── UnifiedSearchView.tsx # 통합 검색
+│           └── ...
 │
-├── tests/                   # Python 테스트
-├── docs/                    # 문서
-├── pyproject.toml           # Python 프로젝트 설정
-└── .env                     # 환경 변수 (gitignore)
+├── scripts/ldap/                    # LDAP 서버 스크립트
+│   ├── start.sh                     # 서버 시작
+│   └── seed.ldif                    # 테스트 계정
+│
+├── docs/                            # 아키텍처 문서
+├── pyproject.toml
+└── .env
 ```
+
+---
+
+## API 엔드포인트
+
+### 인증
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `POST` | `/api/auth/login` | LDAP 로그인 → JWT 쿠키 발급 |
+| `POST` | `/api/auth/logout` | 쿠키 삭제 |
+
+### 세션
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `GET` | `/api/sessions` | 세션 목록 |
+| `POST` | `/api/sessions` | 세션 생성 |
+| `GET` | `/api/sessions/:id` | 세션 상세 |
+| `PUT` | `/api/sessions/:id` | 세션 수정 |
+| `DELETE` | `/api/sessions/:id` | 세션 삭제 |
+
+### 문서
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `POST` | `/api/upload` | PDF 업로드 + 표 추출 |
+| `GET` | `/api/documents/pdf` | PDF 파일 |
+| `GET` | `/api/documents/page-image` | 페이지 이미지 |
+| `GET` | `/api/documents/tables` | 표 목록 |
+| `GET` | `/api/documents/html` | 표 HTML |
+
+### 검색
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `POST` | `/api/search` | 표 검색 (벡터 유사도) |
+| `POST` | `/api/smart-search` | AI 표 선택 검색 (SSE) |
+| `POST` | `/api/unified-search` | 통합 문서 검색 (SSE) |
+| `POST` | `/api/unified-followup` | 후속 질문 (SSE) |
+
+### AI
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `POST` | `/api/qa` | 표 Q&A (SSE) |
+| `POST` | `/api/ask-document` | 문서 QA (SSE) |
+
+### 기타
+
+| Method | Path | 설명 |
+|--------|------|------|
+| `GET` | `/api/health` | 헬스체크 |
+| `POST` | `/api/translate/html-pages` | 페이지별 번역 |
+| `POST` | `/api/table/transpose` | 표 전치 |
+| `POST` | `/api/table/calculate` | 표 계산 |
 
 ---
 
 ## 기술 스택
 
-| 계층 | 기술 | 버전 |
-|------|------|------|
-| **프론트엔드** | React + TypeScript | 19.x |
-| | Vite | 8.x |
-| | Tailwind CSS | 4.x |
-| | Zustand (상태 관리) | 5.x |
-| | react-markdown + remark-gfm + rehype-raw | 10.x / 4.x / 7.x |
-| | pdf.js (CDN) | 4.0 |
-| **백엔드** | FastAPI | 0.100+ |
-| | Uvicorn (ASGI) | 0.20+ |
-| | LangChain | 0.1+ |
-| **PDF 처리** | opendataloader-pdf (hybrid) | 2.2+ |
-| | PyMuPDF (fitz) | 1.24+ |
-| | BeautifulSoup4 | 4.12+ |
-| **임베딩** | SentenceTransformers (bge-m3) | 2.0+ |
-| **벡터 DB** | ChromaDB | 0.4+ |
-| **LLM** | Ollama Cloud (gpt-oss:120b) | - |
-| **검색** | BM25Okapi (rank-bm25) | 0.2+ |
-| **데이터** | Pandas | 2.0+ |
+| 계층 | 기술 |
+|------|------|
+| **프론트엔드** | React 19, TypeScript, Tailwind CSS v4, Zustand 5, pdf.js 4.0 |
+| **백엔드** | FastAPI, Uvicorn, LangChain |
+| **인증** | LDAP (ldap3), JWT (PyJWT), httpOnly 쿠키 |
+| **벡터 DB** | Weaviate 1.30+ (Embedded), 팩토리 패턴으로 ChromaDB 대체 가능 |
+| **임베딩** | SentenceTransformers (BAAI/bge-m3, 1024차원, CPU) |
+| **LLM** | Ollama Cloud (gpt-oss:120b) |
+| **PDF 처리** | opendataloader-pdf (docling-fast), PyMuPDF (fitz), BeautifulSoup4 |
+| **검색** | BM25Okapi (rank-bm25), RRF Fusion |
+| **보안** | PII 마스킹 (주민/계좌/전화번호), CORS |
 
 ---
 
 ## 트러블슈팅
 
-### 문제: 하이브리드 서버 연결 실패
+### LDAP 서버 연결 실패
 
 ```bash
-# 서버 상태 확인
-curl http://localhost:5002/health
+bash scripts/ldap/start.sh   # 서버 시작
+ldapsearch -x -H ldap://localhost:3890 -b "dc=pdfportal,dc=local"  # 연결 확인
+```
 
-# 서버가 없으면 시작
+### Weaviate 시작 실패
+
+포트 충돌 시 기존 프로세스 종료 후 재시도:
+
+```bash
+lsof -i :8079 | grep LISTEN | awk '{print $2}' | xargs kill -9
+rm -rf /tmp/weaviate-data   # 손상된 데이터 삭제
+```
+
+### 하이브리드 변환 서버 없음
+
+서버가 없으면 표준 변환 모드로 자동 폴백됩니다. 표 인식률이 떨어질 수 있습니다.
+
+```bash
 opendataloader-pdf-hybrid --port 5002 &
+curl http://localhost:5002/health  # 상태 확인
 ```
-
-하이브리드 서버가 없으면 표준 변환 모드로 자동 폴백됩니다。표 인식률이 떨어질 수 있으니 가능하면 실행하세요。
-
-### 문제: Ollama API 오류
-
-```bash
-# API 연결 테스트
-curl https://ollama.com/v1/chat/completions \
-  -H "Authorization: Bearer $OLLAMA_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-oss:120b","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
-```
-
-- `.env`에서 `OLLAMA_API_KEY`가 올바른지 확인
-- `ZAI_LLM_MODEL`이 Ollama에서 지원하는 모델명인지 확인
-
-### 문제: 특정 페이지에서 표가 감지되지 않음
-
-PyMuPDF의 `find_tables()`가 표를 감지하지 못하는 경우가 있습니다 (셀 병합, 테두리 없는 표 등). 이 경우 hybrid 파이프라인(opendataloader-pdf)에서 감지한 표가 자동으로 fallback으로 포함됩니다.
-
-서버 로그에서 `[build] fallback` 메시지로 확인할 수 있습니다.
-
-### 문제: PDF 업로드 실패 (ChromaDB readonly)
-
-upload 중 "attempt to write a readonly database" 에러가 발생하면:
-
-- `vectorstore.py`가 자동으로 디렉토리를 재생성하여 재시도 (최대 2회)
-- 서버를 재시작하여 `/tmp` 내 임시 파일 정리
-
-### 문제: 페이지 번호와 내용 불일치
-
-문서 청킹이 페이지 구분자(`<div class='page-sep' data-pn='N'>`)를 기준으로 수행되므로, 출처 페이지 번호는 실제 페이지와 일치해야 합니다. 불일치가 발생하면 문서를 다시 업로드하세요。
 
 ---
 
 ## 라이선스
 
-이 프로젝트는 MIT 라이선스 하에 배포됩니다。자세한 내용은 [LICENSE](LICENSE) 파일을 확인하세요。
+MIT License. 자세한 내용은 [LICENSE](LICENSE) 파일을 확인하세요.

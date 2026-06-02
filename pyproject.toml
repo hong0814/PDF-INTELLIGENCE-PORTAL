@@ -1,7 +1,7 @@
 [project]
 name = "pdftablesearch"
 version = "0.1.0"
-description = "Semantic table search within PDF documents using LangChain, ChromaDB, and z.ai API"
+description = "PDF Intelligence Portal — 금융 문서 AI 분석 (Weaviate, LDAP 인증, RAG)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -28,7 +28,14 @@ dependencies = [
     "pymupdf>=1.24.0",
     "rank-bm25>=0.2.2",
     "cryptography>=41.0.0",
+    "ldap3>=2.9.0",
+    "PyJWT>=2.8.0",
+    "weaviate-client>=4.0.0",
 ]
+
+[project.scripts]
+ldap = "pdftablesearch.ldap_server:start"
+ldap-stop = "pdftablesearch.ldap_server:stop"
 
 [project.optional-dependencies]
 dev = [

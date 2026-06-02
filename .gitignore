@@ -68,3 +68,9 @@ Thumbs.db
 # Test coverage
 .coverage
 .pytest_cache
+
+# PDF test files in root
+/*.pdf
+
+# uv lock
+uv.lock
