@@ -2,7 +2,6 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { PdfInfo, SessionInfo } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
-import { BASE } from '../api/client';
 
 interface SidebarProps {
   sessionId: string;
@@ -125,19 +124,14 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
     try {
-      const res = await fetch(`${BASE}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      const data = await res.json();
+      const data = await api.createSession(name);
       if (data.session_id) {
         switchSession(data.session_id, data.name || name);
         api.getSessions().then((d: import('../types').SessionsResponse) => {
           setSessions(d.sessions ?? []);
         }).catch(() => {});
       }
-    } catch (e) {
+    } catch {
       alert('세션 생성 실패');
     }
   }, [switchSession]);
@@ -336,7 +330,7 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
                       e.stopPropagation();
                       if (!confirm(`"${session.name}" 세션을 삭제할까요?`)) return;
                       try {
-                        await fetch(`${BASE}/sessions/${session.session_id}`, { method: 'DELETE' });
+                        await api.deleteSession(session.session_id);
                         if (session.session_id === sessionId) {
                           localStorage.removeItem('pdftablesearch_session_id');
                           setSession('', '');
