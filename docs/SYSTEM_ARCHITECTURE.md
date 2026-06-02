@@ -115,9 +115,7 @@ graph TB
     end
 
     subgraph "데이터 계층"
-        vs_factory["vectorstores/__init__.py<br/>팩토리: create_vector_store()"]
-        wvs["vectorstores/weaviate_store.py<br/>WeaviateTableVectorStore"]
-        legacy["vectorstore.py<br/>ChromaDB 레거시"]
+        wvs["vectorstores/<br/>WeaviateTableVectorStore"]
         emb["local_embeddings.py<br/>bge-m3"]
         pii["pii_masking.py<br/>PII 마스킹"]
     end
@@ -129,12 +127,10 @@ graph TB
     ws --> auth
     ws --> core & smart & hybrid & qa & trans & tu
     core --> search & reranker
-    search --> vs_factory
-    vs_factory --> wvs & legacy
+    search --> wvs
     wvs --> emb
-    legacy --> emb
     smart --> llm & search
-    hybrid --> vs_factory
+    hybrid --> wvs
     reranker --> llm
     ws --> loader & dp & pii
     qa --> llm
@@ -435,20 +431,16 @@ graph LR
 
 ## 7. 핵심 설계 결정
 
-### 7.1 벡터 DB 팩토리 패턴
+### 7.1 벡터 DB (Weaviate)
 
 ```
-VECTOR_BACKEND 환경변수
-        │
-        ├── "weaviate" ──→ WeaviateTableVectorStore (vectorstores/weaviate_store.py)
-        │                  Embedded :8079/:50050
-        │                  Hybrid Search 지원
-        │
-        └── "chroma" ───→ TableVectorStore (vectorstore.py)
-                           ChromaDB 레거시
+Weaviate Embedded :8079/:50050
+  ├── PdfTables 컬렉션 (표 임베딩)
+  └── DocChunks 컬렉션 (텍스트 청크 임베딩)
+      Hybrid Search 지원 (벡터 + 키워드)
 ```
 
-`vectorstores/__init__.py`의 `create_vector_store()` 팩토리가 `VECTOR_BACKEND` 값을 읽어 적절한 구현체를 반환합니다.
+`vectorstores/weaviate_store.py`의 `WeaviateTableVectorStore`가 `VectorStoreBackend` 프로토콜을 구현합니다.
 
 ### 7.2 table_id 이중 매칭
 

@@ -153,7 +153,7 @@ open http://localhost:8000
 | `WEAVIATE_PORT` | `8079` | HTTP 포트 |
 | `WEAVIATE_GRPC_PORT` | `50050` | gRPC 포트 |
 | `WEAVIATE_USE_EMBEDDED` | `true` | Embedded 모드 사용 |
-| `VECTOR_BACKEND` | `weaviate` | 벡터 DB 백엔드 (`weaviate` 또는 `chroma`) |
+| `VECTOR_BACKEND` | `weaviate` | 벡터 DB 백엔드 |
 
 ### 인증
 
@@ -184,7 +184,7 @@ pdftablesearch/
 │   ├── translation.py               # 문서 번역
 │   ├── reranker.py                  # 리랭킹
 │   ├── ldap_server.py               # 로컬 OpenLDAP 래퍼
-│   ├── vectorstore.py               # ChromaDB (레거시)
+│   ├── config.py                    # 환경설정 (pydantic-settings)
 │   ├── vectorstores/                # Weaviate (현재 백엔드)
 │   │   ├── __init__.py              # 팩토리: create_vector_store()
 │   │   ├── weaviate_client.py       # embedded/local 연결
@@ -283,7 +283,7 @@ pdftablesearch/
 | **프론트엔드** | React 19, TypeScript, Tailwind CSS v4, Zustand 5, pdf.js 4.0 |
 | **백엔드** | FastAPI, Uvicorn, LangChain |
 | **인증** | LDAP (ldap3), JWT (PyJWT), httpOnly 쿠키 |
-| **벡터 DB** | Weaviate 1.30+ (Embedded), 팩토리 패턴으로 ChromaDB 대체 가능 |
+| **벡터 DB** | Weaviate 1.30+ (Embedded) |
 | **임베딩** | SentenceTransformers (BAAI/bge-m3, 1024차원, CPU) |
 | **LLM** | Ollama Cloud (gpt-oss:120b) |
 | **PDF 처리** | opendataloader-pdf (docling-fast), PyMuPDF (fitz), BeautifulSoup4 |
