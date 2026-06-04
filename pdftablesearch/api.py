@@ -1,16 +1,15 @@
-"""FastAPI REST API server for PDFTableSearch.
+"""PDFTableSearch FastAPI REST API 서버.
 
-Provides HTTP endpoints for uploading PDFs, searching tables, and
-asking questions about table content.
+PDF 업로드, 표 검색, 표 내용 질의응답을 위한 HTTP 엔드포인트를 제공한다.
 
-Run::
+실행::
 
     uvicorn pdftablesearch.api:app --host 0.0.0.0 --port 8000
 
-Endpoints:
-    POST /search      - Search tables in uploaded PDFs
-    POST /ask         - Ask a question about a PDF's tables
-    GET  /health      - Health check
+엔드포인트:
+    POST /search      - 업로드된 PDF에서 표 검색
+    POST /ask         - PDF 표에 대한 질의응답
+    GET  /health      - 상태 확인
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ async def search(
     query: str = Form(...),
     max_results: int = Form(5),
 ) -> dict:
-    """Search for tables in uploaded PDF files."""
+    """업로드된 PDF 파일에서 표를 검색한다."""
     from pdftablesearch.core import search_tables
 
     pdf_paths: List[str] = []
@@ -81,7 +80,7 @@ async def ask(
     file: UploadFile = File(...),
     query: str = Form(...),
 ) -> dict:
-    """Ask a question about a table in the uploaded PDF."""
+    """업로드된 PDF의 표에 대해 질문한다."""
     from pdftablesearch.table_qa import ask_table
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):

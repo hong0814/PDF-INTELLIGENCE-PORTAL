@@ -48,9 +48,9 @@ def get_weaviate_config() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def get_weaviate_client() -> Any:
-    """Return a cached Weaviate client for the configured instance."""
+    """Return a cached Weaviate client. Starts embedded if configured."""
+    import httpx
     import weaviate
-    from weaviate.classes.init import Auth
 
     config = get_weaviate_config()
     host = config["host"]
@@ -58,13 +58,28 @@ def get_weaviate_client() -> Any:
     grpc_port = config["grpc_port"]
 
     if config["use_embedded"]:
-        logger.info(
-            "Connecting to local Weaviate at %s:%d (gRPC %d)",
-            host,
-            port,
-            grpc_port,
+        ready_url = f"http://{host}:{port}/v1/.well-known/ready"
+        try:
+            resp = httpx.get(ready_url, timeout=2)
+            if resp.status_code == 200:
+                logger.info("Reusing existing Weaviate at %s:%d", host, port)
+                return weaviate.connect_to_local(host=host, port=port, grpc_port=grpc_port)
+        except Exception:
+            pass
+
+        logger.info("Starting embedded Weaviate at %s:%d (gRPC %d)", host, port, grpc_port)
+        return weaviate.connect_to_embedded(
+            hostname=host,
+            port=port,
+            grpc_port=grpc_port,
+            persistence_data_path=config["data_dir"],
+            environment_variables={
+                "DEFAULT_VECTORIZER_MODULE": "none",
+                "ENABLE_MODULES": "",
+            },
         )
-        return weaviate.connect_to_local(host=host, port=port, grpc_port=grpc_port)
+
+    from weaviate.classes.init import Auth
 
     connect_kwargs: dict[str, Any] = {
         "http_host": host,
@@ -84,10 +99,8 @@ def get_weaviate_client() -> Any:
 
 def close_weaviate_client() -> None:
     """Close and clear the cached Weaviate client."""
-    client = None
     if get_weaviate_client.cache_info().currsize:
         client = get_weaviate_client()
-    if client is not None:
         try:
             client.close()
         except Exception:

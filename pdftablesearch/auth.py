@@ -1,72 +1,222 @@
-"""Cookie-backed login and idle-session enforcement for the web API."""
+"""LDAP authentication and JWT cookie helpers for the FastAPI app."""
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
+import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from fastapi import HTTPException, Request
-from starlette.responses import Response
+import jwt
+import ldap3
+from fastapi import Header, HTTPException, Request, Response
+from ldap3.core.exceptions import LDAPBindError, LDAPException
+from ldap3.utils.conv import escape_filter_chars
+from pydantic import BaseModel, Field
 
 from pdftablesearch.config import get_settings
 
-AUTH_COOKIE = "pdf_portal_auth"
-AUTH_PRESENCE_COOKIE = "pdf_portal_auth_presence"
+logger = logging.getLogger(__name__)
 
-
-@dataclass
-class AuthUser:
-    user_id: str
-    username: str
-    name: str
-    department_id: str = ""
-    roles: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "user_id": self.user_id,
-            "username": self.username,
-            "name": self.name,
-            "department_id": self.department_id,
-            "roles": list(self.roles),
-        }
-
-
-@dataclass
-class AuthSession:
-    token: str
-    user: AuthUser
-    issued_at: float
-    expires_at: float
-    last_activity: float
+_INSECURE_DEFAULT_SECRET = "dev-secret-change-me"
 
 
 @dataclass
 class PreAuthSession:
     token: str
-    user: AuthUser
+    user: "LDAPUser"
     issued_at: float
     expires_at: float
 
 
-_auth_sessions: Dict[str, AuthSession] = {}
-_pre_auth_sessions: Dict[str, PreAuthSession] = {}
+_pre_auth_sessions: dict[str, PreAuthSession] = {}
 
 
-def auth_config() -> dict[str, Any]:
+class LDAPUser(BaseModel):
+    """Authenticated user information derived from LDAP."""
+
+    user_id: str
+    username: str
+    name: str | None = None
+    email: str | None = None
+    department: str | None = None
+    roles: list[str] = Field(default_factory=list)
+
+
+class LDAPClient:
+    """Authenticate users via service-account bind followed by user bind."""
+
+    def __init__(
+        self,
+        server: str,
+        base_dn: str,
+        service_bind_dn: str,
+        service_bind_password: str,
+        user_filter: str,
+        attr_map: dict[str, str],
+        use_tls: bool = False,
+        strategy: str = ldap3.SYNC,
+    ) -> None:
+        self._server = ldap3.Server(server, use_ssl=use_tls, get_info=ldap3.NONE)
+        self._base_dn = base_dn
+        self._service_bind_dn = service_bind_dn
+        self._service_bind_password = service_bind_password
+        self._user_filter = user_filter
+        self._attr_map = attr_map
+        self._strategy = strategy
+
+    def authenticate(self, username: str, password: str) -> LDAPUser | None:
+        """Return the LDAP user on success, otherwise ``None``."""
+        username = username.strip()
+        if not username or not password:
+            return None
+
+        service_conn = self._bind_service_account()
+        if service_conn is None:
+            return None
+
+        try:
+            attrs = list(dict.fromkeys(self._attr_map.values()))
+            escaped_username = escape_filter_chars(username)
+            search_filter = self._user_filter.format(username=escaped_username)
+            service_conn.search(self._base_dn, search_filter, attributes=attrs)
+            if not service_conn.entries:
+                return None
+
+            entry = service_conn.entries[0]
+            user_dn = entry.entry_dn
+            user_attrs = self._extract_attrs(entry)
+        finally:
+            service_conn.unbind()
+
+        try:
+            user_conn = ldap3.Connection(
+                self._server,
+                user=user_dn,
+                password=password,
+                client_strategy=self._strategy,  # type: ignore[arg-type]
+                auto_bind=ldap3.AUTO_BIND_NO_TLS,
+            )
+            if not user_conn.bind():
+                return None
+        except LDAPBindError:
+            return None
+        except LDAPException:
+            return None
+        else:
+            user_conn.unbind()
+
+        return LDAPUser(
+            user_id=username,
+            username=username,
+            name=user_attrs.get("name") or username,
+            email=user_attrs.get("email"),
+            department=user_attrs.get("department"),
+            roles=user_attrs.get("roles", []),
+        )
+
+    def _bind_service_account(self) -> ldap3.Connection | None:
+        try:
+            conn = ldap3.Connection(
+                self._server,
+                user=self._service_bind_dn,
+                password=self._service_bind_password,
+                client_strategy=self._strategy,  # type: ignore[arg-type]
+                auto_bind=ldap3.AUTO_BIND_NO_TLS,
+            )
+        except LDAPException:
+            return None
+        if not conn.bind():
+            return None
+        return conn
+
+    def _extract_attrs(self, entry: Any) -> dict[str, Any]:
+        def _values(ldap_attr: str) -> list[str]:
+            value = getattr(entry, ldap_attr, None)
+            if value is None:
+                return []
+            if hasattr(value, "values"):
+                return [str(v) for v in value.values if v is not None]
+            return [str(value)]
+
+        role_values = _values(self._attr_map.get("role", "title"))
+        return {
+            "name": next(iter(_values(self._attr_map.get("name", "cn"))), None),
+            "email": next(iter(_values(self._attr_map.get("email", "mail"))), None),
+            "department": next(
+                iter(_values(self._attr_map.get("department", "departmentNumber"))),
+                None,
+            ),
+            "roles": role_values,
+        }
+
+
+def ldap_client_from_settings() -> LDAPClient:
+    """Construct the LDAP client from environment-backed settings."""
+    settings = get_settings()
+    missing = [
+        key
+        for key, value in (
+            ("LDAP_SERVER_URL", settings.ldap_server_url),
+            ("LDAP_BASE_DN", settings.ldap_base_dn),
+            ("LDAP_SERVICE_BIND_DN", settings.ldap_service_bind_dn),
+            ("LDAP_SERVICE_BIND_PASSWORD", settings.ldap_service_bind_password),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "LDAP authentication is not fully configured. Missing: "
+            + ", ".join(missing)
+        )
+
+    return LDAPClient(
+        server=settings.ldap_server_url,
+        base_dn=settings.ldap_base_dn,
+        service_bind_dn=settings.ldap_service_bind_dn,
+        service_bind_password=settings.ldap_service_bind_password,
+        user_filter=settings.ldap_user_filter,
+        attr_map={
+            "name": settings.ldap_attr_name,
+            "email": settings.ldap_attr_email,
+            "department": settings.ldap_attr_department,
+            "role": settings.ldap_attr_role,
+        },
+        use_tls=settings.ldap_use_tls,
+    )
+
+
+def issue_auth_token(user: LDAPUser) -> tuple[str, int]:
+    """Issue a signed session token and return ``(token, ttl_seconds)``."""
+    settings = get_settings()
+    ttl_seconds = max(1, settings.auth_token_expire_hours) * 3600
+    now = int(time.time())
+    payload = {
+        "sub": "session",
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + ttl_seconds,
+        **user.model_dump(),
+    }
+    token = jwt.encode(payload, settings.auth_secret_key, algorithm="HS256")
+    return token, ttl_seconds
+
+
+def auth_config() -> dict[str, int]:
+    """Return public browser-side auth timing configuration."""
     settings = get_settings()
     return {
-        "enabled": settings.auth_enabled,
         "idle_timeout_seconds": settings.auth_idle_timeout_seconds,
         "warn_before_seconds": settings.auth_warn_before_seconds,
-        "session_ttl_seconds": settings.auth_session_ttl_seconds,
+        "session_ttl_seconds": max(1, settings.auth_token_expire_hours) * 3600,
         "pre_auth_ttl_seconds": settings.auth_pre_auth_ttl_seconds,
     }
 
 
-def create_pre_auth_session(user: AuthUser) -> PreAuthSession:
+def create_pre_auth_session(user: LDAPUser) -> PreAuthSession:
+    """Store a short-lived OTP pre-auth session for a validated LDAP user."""
     settings = get_settings()
     now = time.time()
     token = secrets.token_urlsafe(32)
@@ -80,7 +230,8 @@ def create_pre_auth_session(user: AuthUser) -> PreAuthSession:
     return session
 
 
-def verify_otp(pre_auth_token: str, otp_code: str) -> AuthUser:
+def verify_otp(pre_auth_token: str, otp_code: str) -> LDAPUser:
+    """Validate an OTP code and consume the pre-auth token."""
     settings = get_settings()
     session = _pre_auth_sessions.get(pre_auth_token)
     now = time.time()
@@ -99,179 +250,86 @@ def verify_otp(pre_auth_token: str, otp_code: str) -> AuthUser:
     return session.user
 
 
-def create_auth_session(user: AuthUser) -> AuthSession:
+def decode_auth_token(token: str) -> LDAPUser | None:
+    """Validate and decode a session token."""
     settings = get_settings()
-    now = time.time()
-    token = secrets.token_urlsafe(32)
-    session = AuthSession(
-        token=token,
-        user=user,
-        issued_at=now,
-        expires_at=now + settings.auth_session_ttl_seconds,
-        last_activity=now,
-    )
-    _auth_sessions[token] = session
-    return session
-
-
-def get_auth_session(token: Optional[str]) -> Optional[AuthSession]:
-    if not token:
+    try:
+        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
         return None
-    return _auth_sessions.get(token)
+    except jwt.InvalidTokenError:
+        return None
+
+    if payload.get("sub") != "session":
+        return None
+
+    claims = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"sub", "iat", "exp", "jti"}
+    }
+    try:
+        return LDAPUser.model_validate(claims)
+    except Exception:
+        return None
 
 
-def validate_auth_request(request: Request) -> Optional[AuthSession]:
+def set_auth_cookie(response: Response, token: str, ttl_seconds: int) -> None:
+    """Persist the auth token in an httpOnly cookie."""
     settings = get_settings()
-    if not settings.auth_enabled:
-        return None
-
-    token = request.cookies.get(AUTH_COOKIE)
-    session = get_auth_session(token)
-    if session is None:
-        return None
-
-    now = time.time()
-    if session.expires_at <= now or now - session.last_activity > settings.auth_idle_timeout_seconds:
-        _auth_sessions.pop(session.token, None)
-        return None
-
-    session.last_activity = now
-    return session
-
-
-def end_auth_session(token: Optional[str]) -> None:
-    if token:
-        _auth_sessions.pop(token, None)
-
-
-def set_auth_cookies(response: Response, session: AuthSession) -> None:
-    settings = get_settings()
-    max_age = int(max(0, session.expires_at - time.time()))
     response.set_cookie(
-        AUTH_COOKIE,
-        session.token,
-        max_age=max_age,
+        key=settings.auth_cookie_name,
+        value=token,
+        max_age=ttl_seconds,
         httponly=True,
         secure=settings.auth_cookie_secure,
-        samesite="lax",
+        samesite=settings.auth_cookie_samesite,
         path="/",
     )
-    response.set_cookie(
-        AUTH_PRESENCE_COOKIE,
-        "1",
-        max_age=max_age,
-        httponly=False,
+
+
+def clear_auth_cookie(response: Response) -> None:
+    """Delete the auth cookie."""
+    settings = get_settings()
+    response.delete_cookie(
+        key=settings.auth_cookie_name,
         secure=settings.auth_cookie_secure,
-        samesite="lax",
+        samesite=settings.auth_cookie_samesite,
         path="/",
     )
 
 
-def clear_auth_cookies(response: Response) -> None:
-    response.delete_cookie(AUTH_COOKIE, path="/")
-    response.delete_cookie(AUTH_PRESENCE_COOKIE, path="/")
-
-
-def authenticate_login(username: str, password: str) -> AuthUser:
+async def get_current_user(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+) -> LDAPUser:
     settings = get_settings()
-    if settings.ldap_server:
-        return _authenticate_ldap(username=username, password=password)
-    return _authenticate_dev_user(username=username, password=password)
+    token = request.cookies.get(settings.auth_cookie_name)
+    if token is None and authorization and isinstance(authorization, str) and authorization.startswith("Bearer "):
+        token = authorization[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user = decode_auth_token(token)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return user
 
 
-def _authenticate_dev_user(username: str, password: str) -> AuthUser:
+def warn_if_insecure_auth_secret() -> None:
+    """Reject the baked-in JWT secret outside explicit local development."""
     settings = get_settings()
-    for entry in settings.auth_dev_users.split(","):
-        fields = [field.strip() for field in entry.split(":")]
-        if len(fields) < 2:
-            continue
-        user, expected = fields[0], fields[1]
-        if not secrets.compare_digest(user, username):
-            continue
-        if not secrets.compare_digest(expected, password):
-            break
-        name = fields[2] if len(fields) >= 3 and fields[2] else username
-        roles = tuple(
-            role.strip()
-            for role in (fields[3].split("|") if len(fields) >= 4 else ["user"])
-            if role.strip()
+    if settings.auth_secret_key == _INSECURE_DEFAULT_SECRET and settings.app_env.lower() not in {
+        "dev",
+        "local",
+        "test",
+    }:
+        raise RuntimeError(
+            "AUTH_SECRET_KEY is using the development default. Set a strong secret before "
+            "running LDAP authentication outside local development."
         )
-        return AuthUser(user_id=username, username=username, name=name, roles=roles)
-    raise HTTPException(status_code=401, detail="Invalid username or password")
-
-
-def _authenticate_ldap(username: str, password: str) -> AuthUser:
-    settings = get_settings()
-    if not password:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    try:
-        from ldap3 import ALL, Connection, Server
-        from ldap3.utils.conv import escape_filter_chars
-    except ImportError as exc:
-        raise HTTPException(status_code=503, detail="ldap3 dependency is not installed") from exc
-
-    server = Server(settings.ldap_server, get_info=ALL)
-    bind_kwargs: dict[str, Any] = {"auto_bind": True}
-    if settings.ldap_bind_dn:
-        bind_kwargs["user"] = settings.ldap_bind_dn
-        bind_kwargs["password"] = settings.ldap_bind_password or ""
-
-    try:
-        service_conn = Connection(server, **bind_kwargs)
-        user_filter = settings.ldap_user_filter.format(
-            username=escape_filter_chars(username)
+    if settings.auth_secret_key == _INSECURE_DEFAULT_SECRET:
+        logger.warning(
+            "AUTH_SECRET_KEY is using the development default. "
+            "Set a strong secret before deploying beyond local development."
         )
-        found = service_conn.search(
-            search_base=settings.ldap_base_dn,
-            search_filter=user_filter,
-            attributes=[
-                settings.ldap_name_attr,
-                settings.ldap_department_attr,
-                settings.ldap_roles_attr,
-            ],
-            size_limit=1,
-        )
-        if not found or not service_conn.entries:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
-
-        entry = service_conn.entries[0]
-        user_dn = entry.entry_dn
-        service_conn.unbind()
-
-        user_conn = Connection(server, user=user_dn, password=password, auto_bind=True)
-        user_conn.unbind()
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid username or password") from exc
-
-    name = _entry_value(entry, settings.ldap_name_attr) or username
-    department_id = _entry_value(entry, settings.ldap_department_attr) or ""
-    raw_roles = _entry_values(entry, settings.ldap_roles_attr)
-    roles = tuple(raw_roles) if raw_roles else ("user",)
-    return AuthUser(
-        user_id=username,
-        username=username,
-        name=name,
-        department_id=department_id,
-        roles=roles,
-    )
-
-
-def _entry_value(entry: Any, attr: str) -> str:
-    values = _entry_values(entry, attr)
-    return values[0] if values else ""
-
-
-def _entry_values(entry: Any, attr: str) -> list[str]:
-    try:
-        value = getattr(entry, attr)
-    except Exception:
-        return []
-    try:
-        values = value.values
-    except Exception:
-        raw = str(value) if value is not None else ""
-        return [raw] if raw else []
-    return [str(item) for item in values if str(item)]

@@ -3,10 +3,11 @@ import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
 
 interface SessionHeaderProps {
-  onLogout?: () => void;
+  onLogout: () => Promise<void>;
 }
 
 export default function SessionHeader({ onLogout }: SessionHeaderProps) {
+  const user = useAppStore((s) => s.user);
   const sessionName = useAppStore((s) => s.sessionName);
   const pdfs = useAppStore((s) => s.pdfs);
   const totalTables = useAppStore((s) => s.totalTables);
@@ -121,15 +122,19 @@ export default function SessionHeader({ onLogout }: SessionHeaderProps) {
         </svg>
         PDF 추가
       </div>
-      {onLogout && (
+
+      <div className="flex items-center gap-2 shrink-0 pl-2 border-l border-border">
+        <div className="text-right">
+          <p className="text-xs font-medium text-text-primary">{user?.name || user?.username}</p>
+          <p className="text-[11px] text-text-muted">{user?.department || user?.email || 'LDAP 사용자'}</p>
+        </div>
         <button
-          type="button"
-          onClick={onLogout}
-          className="h-8 px-3 rounded-md border border-border text-xs font-medium text-text-secondary hover:bg-surface hover:text-text-primary transition-colors"
+          className="px-3 py-1.5 rounded-lg border border-border text-xs text-text-secondary hover:text-text-primary hover:bg-surface transition-colors"
+          onClick={() => { void onLogout(); }}
         >
           로그아웃
         </button>
-      )}
+      </div>
     </header>
   );
 }

@@ -2,7 +2,6 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { PdfInfo, SessionInfo } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
-import { BASE } from '../api/client';
 
 interface SidebarProps {
   sessionId: string;
@@ -125,19 +124,14 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
     try {
-      const res = await api.apiFetch(`${BASE}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      const data = await res.json();
+      const data = await api.createSession(name);
       if (data.session_id) {
         switchSession(data.session_id, data.name || name);
         api.getSessions().then((d: import('../types').SessionsResponse) => {
           setSessions(d.sessions ?? []);
         }).catch(() => {});
       }
-    } catch (e) {
+    } catch {
       alert('세션 생성 실패');
     }
   }, [switchSession]);
@@ -211,26 +205,31 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
           <p className="text-xs text-white/30 mt-1">.pdf 파일만 지원</p>
         </div>
 
-        {(isUploading || uploadProgress !== null) && (
+        {isUploading && (
           <div className="mt-3">
-            <div className="flex items-center justify-between gap-2 text-xs text-accent mb-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <svg className="w-4 h-4 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span className="truncate">업로드 및 분석 중...</span>
-              </div>
-              {uploadProgress !== null && (
-                <span className="shrink-0 font-medium">{Math.round(uploadProgress)}%</span>
-              )}
+            <div className="flex items-center gap-2 text-xs text-accent mb-2">
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              업로드 및 분석 중...
+            </div>
+            <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+              <div className="h-full bg-accent rounded-full animate-pulse" style={{ width: '100%' }} />
+            </div>
+          </div>
+        )}
+
+        {uploadProgress !== null && (
+          <div className="mt-3">
+            <div className="flex justify-between text-xs text-white/50 mb-1">
+              <span>{uploadProgress < 100 ? '업로드 중...' : '업로드 완료!'}</span>
+              <span>{uploadProgress < 100 ? `${Math.round(uploadProgress)}%` : '✓'}</span>
             </div>
             <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
               <div
-                className={`h-full bg-accent rounded-full transition-all duration-300 ease-out ${
-                  uploadProgress === null ? 'animate-pulse' : ''
-                }`}
-                style={{ width: `${uploadProgress ?? 100}%` }}
+                className="h-full bg-accent rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${uploadProgress}%` }}
               />
             </div>
           </div>
@@ -331,7 +330,7 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
                       e.stopPropagation();
                       if (!confirm(`"${session.name}" 세션을 삭제할까요?`)) return;
                       try {
-                        await api.apiFetch(`${BASE}/sessions/${session.session_id}`, { method: 'DELETE' });
+                        await api.deleteSession(session.session_id);
                         if (session.session_id === sessionId) {
                           localStorage.removeItem('pdftablesearch_session_id');
                           setSession('', '');

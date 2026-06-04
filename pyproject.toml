@@ -1,14 +1,40 @@
 [project]
-name = "pdf-intelligence-portal"
-version = "0.1.0"
-description = "Workspace launcher for PDF Intelligence Portal"
+name = "pdftablesearch"
+version = "0.2.0"
+description = "PDF Intelligence Portal — 금융 문서 AI 분석 (Weaviate, LDAP 인증, RAG)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "Apache-2.0"}
+license = {text = "MIT"}
 dependencies = [
-    "pdftablesearch",
-    "pdf-intelligence-web",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "python-multipart>=0.0.5",
+    "beautifulsoup4>=4.12.0",
+    "pandas>=2.0.0",
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.20",
+    "langchain-core>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langchain-text-splitters>=0.0.1",
+    "opendataloader-pdf[hybrid]>=2.2.1",
+    "requests>=2.31.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+    "tqdm>=4.66.0",
+    "sentence-transformers>=2.0.0",
+    "pymupdf>=1.24.0",
+    "rank-bm25>=0.2.2",
+    "cryptography>=41.0.0",
+    "ldap3>=2.9.0",
+    "PyJWT>=2.8.0",
+    "weaviate-client>=4.0.0",
 ]
+
+[project.scripts]
+ldap = "pdftablesearch.ldap_server:start"
+ldap-stop = "pdftablesearch.ldap_server:stop"
 
 [project.optional-dependencies]
 dev = [
@@ -18,41 +44,13 @@ dev = [
     "ruff>=0.1.0",
 ]
 
-[project.scripts]
-all = "pdftablesearch.port_utils:run_all"
-api = "pdftablesearch.run:main"
-killports = "pdftablesearch.port_utils:killports"
-pdf-portal = "pdftablesearch.run:main"
-qa = "pdftablesearch.qa:main"
-ui = "pdf_intelligence_web.cli:dev"
-ui-build = "pdf_intelligence_web.cli:build"
-ui-lint = "pdf_intelligence_web.cli:lint"
-ui-preview = "pdf_intelligence_web.cli:preview"
-weaviate = "pdftablesearch.vectorstores.weaviate_server:main"
-
-[tool.uv.workspace]
-members = [
-    "pdftablesearch",
-    "web",
-]
-
-[tool.uv.sources]
-pdftablesearch = { workspace = true }
-pdf-intelligence-web = { workspace = true }
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["portal_workspace"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = [
-    "weaviate: integration tests that require a local Weaviate server",
-]
 
 [tool.mypy]
 python_version = "3.11"

@@ -98,26 +98,29 @@ export interface SessionsResponse {
 export interface AuthUser {
   user_id: string;
   username: string;
-  name: string;
-  department_id: string;
+  name: string | null;
+  email: string | null;
+  department: string | null;
   roles: string[];
 }
 
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
 export interface AuthConfig {
-  enabled: boolean;
   idle_timeout_seconds: number;
   warn_before_seconds: number;
   session_ttl_seconds: number;
   pre_auth_ttl_seconds: number;
 }
 
-export interface AuthStatus extends AuthConfig {
-  authenticated: boolean;
-  user: AuthUser | null;
+export interface LoginResponse extends AuthConfig {
+  user: AuthUser;
 }
 
-export interface PreAuthStatus extends AuthConfig {
-  authenticated: false;
+export interface LoginPreAuthResponse extends AuthConfig {
   requires_otp: true;
   pre_auth_token: string;
   user: AuthUser;

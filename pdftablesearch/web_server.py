@@ -1,8 +1,5 @@
 """FastAPI web server for PDFTableSearch React frontend.
 
-Session-based API that replaces the Streamlit app. Each user session gets
-its own temporary upload directory and vector-store namespace.
-
 Run with::
 
     uvicorn pdftablesearch.web_server:app --reload --port 8000
@@ -25,7 +22,9 @@ import pandas as pd
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File
+from dataclasses import dataclass
+
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -33,16 +32,16 @@ from starlette.responses import StreamingResponse
 
 from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
 from pdftablesearch.auth import (
-    AUTH_COOKIE,
+    LDAPUser,
     auth_config,
-    authenticate_login,
-    clear_auth_cookies,
-    create_auth_session,
+    clear_auth_cookie,
     create_pre_auth_session,
-    end_auth_session,
-    set_auth_cookies,
-    validate_auth_request,
+    get_current_user,
+    issue_auth_token,
+    ldap_client_from_settings,
+    set_auth_cookie,
     verify_otp,
+    warn_if_insecure_auth_secret,
 )
 from pdftablesearch.config import get_settings
 from pdftablesearch.llm_client import ZaiLLMClient
@@ -54,117 +53,61 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 
 from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
 from pdftablesearch.models import TableSearchResult
-from pdftablesearch.vectorstore import TableVectorStore
+from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
+
+from pdftablesearch.table_utils import (
+    _HEADER_KEYWORDS, _table_col_count, _table_first_row,
+    _row_has_numbers, _row_has_header_keywords,
+    _enrich_tables_with_pymupdf, _escape_html, _normalize_text,
+    _table_text_content, _table_match_score,
+    _extract_top_level_tables_with_nesting, _build_tables_from_pymupdf,
+    _detect_multipage_tables, _apply_table_groups, _merge_grouped_tables,
+)
+from pdftablesearch.doc_processing import (
+    _classify_table_type, _tokenize_korean,
+    _HEADING_TAGS, _BLOCK_TAGS, _PARA_MIN_CHARS, _PARA_MAX_CHARS,
+    _extract_blocks_from_html, _extract_blocks_with_headings,
+    _split_long_text, _split_html_by_paragraphs,
+)
 
 _sessions: Dict[str, dict] = {}
 _embeddings: Optional[SentenceTransformerEmbeddings] = None
 
 
-class _CleanupEmbeddings:
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] for _ in texts]
-
-    def embed_query(self, text: str) -> list[float]:
-        return [0.0]
-
-
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _embeddings
+    warn_if_insecure_auth_secret()
     # Clean up stale temp directories from previous runs
     import glob as _glob
     import shutil
-    for pattern in ["pdf_upload_*", "pdf_chroma_*", "pdf_docchunks_*"]:
+    for pattern in ["pdf_upload_*", "pdf_data_*", "pdf_docchunks_*"]:
         for d in _glob.glob(os.path.join(tempfile.gettempdir(), pattern)):
             try:
                 shutil.rmtree(d, ignore_errors=True)
             except Exception:
                 pass
+    _embeddings = SentenceTransformerEmbeddings()
     yield
 
 
 app = FastAPI(title="PDFTableSearch API", version="0.1.0", lifespan=lifespan)
+_settings = get_settings()
+_cors_allowed_origins = [
+    origin.strip() for origin in _settings.cors_allowed_origins.split(",") if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-def _auth_exempt(path: str) -> bool:
-    return path.startswith("/api/auth/") or path == "/api/health"
-
-
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    settings = get_settings()
-    if (
-        not settings.auth_enabled
-        or request.method == "OPTIONS"
-        or not request.url.path.startswith("/api/")
-        or _auth_exempt(request.url.path)
-    ):
-        return await call_next(request)
-
-    session = validate_auth_request(request)
-    if session is None:
-        response = JSONResponse(
-            status_code=401,
-            content={"detail": "Authentication required"},
-        )
-        clear_auth_cookies(response)
-        return response
-    return await call_next(request)
-
-
 def _get_embeddings() -> SentenceTransformerEmbeddings:
-    global _embeddings
-    if _embeddings is None:
-        _embeddings = SentenceTransformerEmbeddings()
     return _embeddings
-
-
-def _get_vector_store(
-    *,
-    embeddings: Optional[SentenceTransformerEmbeddings],
-    persist_dir: str,
-    session_id: Optional[str],
-    collection_name: Optional[str] = None,
-):
-    store = TableVectorStore(
-        embeddings=embeddings,
-        persist_dir=persist_dir,
-        collection_name=collection_name,
-    )
-    if session_id and hasattr(store, "session_id"):
-        store.session_id = session_id
-    return store
-
-
-def _cleanup_vector_indexes(session_id: str, session: dict) -> None:
-    embeddings = _embeddings or _CleanupEmbeddings()
-    targets = [
-        (session.get("chroma_dir"), None),
-        (session.get("doc_chunks_dir"), f"doc_chunks_{session_id}"),
-    ]
-    for persist_dir, collection_name in targets:
-        if not persist_dir:
-            continue
-        try:
-            store = _get_vector_store(
-                embeddings=embeddings,
-                persist_dir=persist_dir,
-                session_id=session_id,
-                collection_name=collection_name,
-            )
-            deleted = store.delete_where({"session_id": session_id})
-            if not deleted:
-                store.reset()
-        except Exception:
-            pass
 
 
 class SearchRequest(BaseModel):
@@ -217,78 +160,10 @@ class OtpRequest(BaseModel):
     otp_code: str
 
 
-@app.get("/api/auth/config")
-async def auth_config_endpoint() -> JSONResponse:
-    return JSONResponse(content=auth_config())
-
-
-@app.get("/api/auth/me")
-async def auth_me(request: Request) -> JSONResponse:
-    settings = get_settings()
-    if not settings.auth_enabled:
-        return JSONResponse(content={"authenticated": True, "user": None, **auth_config()})
-
-    session = validate_auth_request(request)
-    if session is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return JSONResponse(
-        content={
-            "authenticated": True,
-            "user": session.user.to_dict(),
-            **auth_config(),
-        }
-    )
-
-
-@app.post("/api/auth/ldap")
-async def auth_ldap(body: LoginRequest) -> JSONResponse:
-    user = authenticate_login(body.username.strip(), body.password)
-    pre_auth = create_pre_auth_session(user)
-    return JSONResponse(
-        content={
-            "authenticated": False,
-            "requires_otp": True,
-            "pre_auth_token": pre_auth.token,
-            "user": user.to_dict(),
-            **auth_config(),
-        }
-    )
-
-
-@app.post("/api/auth/otp")
-async def auth_otp(body: OtpRequest) -> JSONResponse:
-    user = verify_otp(body.pre_auth_token, body.otp_code)
-    session = create_auth_session(user)
-    response = JSONResponse(
-        content={
-            "authenticated": True,
-            "user": user.to_dict(),
-            **auth_config(),
-        }
-    )
-    set_auth_cookies(response, session)
-    return response
-
-
-@app.post("/api/auth/logout")
-async def auth_logout(request: Request) -> JSONResponse:
-    end_auth_session(request.cookies.get(AUTH_COOKIE))
-    response = JSONResponse(content={"ok": True})
-    clear_auth_cookies(response)
-    return response
-
-
-@app.post("/api/auth/touch")
-async def auth_touch(request: Request) -> JSONResponse:
-    session = validate_auth_request(request)
-    if session is None:
-        response = JSONResponse(
-            status_code=401,
-            content={"detail": "Authentication required"},
-        )
-        clear_auth_cookies(response)
-        return response
-    return JSONResponse(content={"ok": True, **auth_config()})
+@dataclass
+class SessionContext:
+    session_id: str
+    session: dict[str, Any]
 
 
 def _get_session(session_id: Optional[str]) -> dict:
@@ -297,6 +172,32 @@ def _get_session(session_id: Optional[str]) -> dict:
     session = _sessions[session_id]
     session["last_activity"] = datetime.now(timezone.utc).isoformat()
     return session
+
+
+def _require_owned_session(session_id: Optional[str], current_user: LDAPUser) -> SessionContext:
+    if not session_id or session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _sessions[session_id]
+    owner_id = session.get("owner_id")
+    if owner_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this session")
+
+    session["last_activity"] = datetime.now(timezone.utc).isoformat()
+    return SessionContext(session_id=session_id, session=session)
+
+
+async def get_session_context(
+    request: Request,
+    x_session_id: Optional[str] = Header(default=None, alias="X-Session-ID"),
+) -> SessionContext:
+    session_id = x_session_id or request.query_params.get("session_id")
+    if not session_id or session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _sessions[session_id]
+    session["last_activity"] = datetime.now(timezone.utc).isoformat()
+    return SessionContext(session_id=session_id, session=session)
 
 
 def _serialize_session_brief(session_id: str, session: dict) -> dict:
@@ -339,11 +240,7 @@ def _format_results(
     results: list[TableSearchResult] = []
     for doc, score in search_results:
         results.append(TableSearchResult.from_langchain_document(doc, score))
-    results.sort(
-        key=lambda r: r.relevance_score
-        if r.relevance_score is not None
-        else float("inf")
-    )
+    results.sort(key=lambda r: r.relevance_score or float("inf"))
     return results
 
 
@@ -376,202 +273,10 @@ def _transpose_table_html(html: str) -> str:
     )
 
 
-def _classify_table_type(title: Optional[str], html: Optional[str]) -> str:
-    text = (title or "") + " " + (html or "")
-    text = text.lower()
-    if any(k in text for k in ["매출", "재무", "대차대조표", "재무상태표", "자산", "부채", "자본", "현금흐름"]):
-        return "재무제표"
-    if any(k in text for k in ["손익", "영업이익", "분기별", "매출액", "비용", "수익"]):
-        return "손익계산서"
-    if any(k in text for k in ["리스크", "위험", "부실", "연체", "부도", "npl", "연체율"]):
-        return "리스크"
-    if any(k in text for k in ["담보", "보증", "평가", "저당", "근저당", "부동산", "감정"]):
-        return "담보"
-    return "기타"
 
 
-def _tokenize_korean(text: str) -> list[str]:
-    """Simple tokenizer for Korean + English text."""
-    # Split on whitespace and punctuation, keep meaningful tokens
-    import re as _re
-    tokens = _re.findall(r'[가-힣]+|[a-zA-Z0-9]+', text.lower())
-    return tokens
 
 
-# ---------------------------------------------------------------------------
-# Paragraph-based HTML chunker
-# ---------------------------------------------------------------------------
-
-_HEADING_TAGS = frozenset(["h1", "h2", "h3", "h4", "h5", "h6", "figcaption"])
-
-_BLOCK_TAGS = frozenset([
-    "p", "h1", "h2", "h3", "h4", "h5", "h6",
-    "li", "blockquote", "pre", "div",
-])
-
-_PARA_MIN_CHARS = 100
-_PARA_MAX_CHARS = 1500
-
-
-def _extract_blocks_from_html(page_html: str) -> list[str]:
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(page_html, "html.parser")
-
-    for tag in soup.find_all("table"):
-        tag.decompose()
-
-    blocks: list[str] = []
-
-    for child in soup.children:
-        if not hasattr(child, "name") or child.name is None:
-            text = str(child).strip()
-            if text:
-                blocks.append(text)
-            continue
-
-        tag_name = child.name.lower()
-
-        if tag_name == "table":
-            continue
-
-        if tag_name in _BLOCK_TAGS:
-            text = child.get_text(separator=" ", strip=True)
-            if text:
-                blocks.append(text)
-        elif tag_name in ("ul", "ol"):
-            for li in child.find_all("li", recursive=False):
-                text = li.get_text(separator=" ", strip=True)
-                if text:
-                    blocks.append(text)
-        else:
-            text = child.get_text(separator=" ", strip=True)
-            if text:
-                blocks.append(text)
-
-    return blocks
-
-
-def _extract_blocks_with_headings(page_html: str) -> list[tuple[str, str]]:
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(page_html, "html.parser")
-
-    for tag in soup.find_all("table"):
-        tag.decompose()
-
-    blocks: list[tuple[str, str]] = []
-    heading_stack: list[tuple[int, str]] = []
-
-    for child in soup.children:
-        if not hasattr(child, "name") or child.name is None:
-            text = str(child).strip()
-            if text:
-                section = " > ".join(h for _, h in heading_stack)
-                blocks.append((text, section))
-            continue
-
-        tag_name = child.name.lower()
-
-        if tag_name == "table":
-            continue
-
-        if tag_name in _HEADING_TAGS:
-            heading_text = child.get_text(separator=" ", strip=True)
-            if not heading_text:
-                continue
-            level = int(tag_name[1]) if tag_name[0] == "h" else 3
-            heading_stack = [(lv, txt) for lv, txt in heading_stack if lv < level]
-            heading_stack.append((level, heading_text))
-            section = " > ".join(h for _, h in heading_stack)
-            blocks.append((heading_text, section))
-            continue
-
-        if tag_name in _BLOCK_TAGS:
-            text = child.get_text(separator=" ", strip=True)
-            if text:
-                section = " > ".join(h for _, h in heading_stack)
-                blocks.append((text, section))
-        elif tag_name in ("ul", "ol"):
-            for li in child.find_all("li", recursive=False):
-                text = li.get_text(separator=" ", strip=True)
-                if text:
-                    section = " > ".join(h for _, h in heading_stack)
-                    blocks.append((text, section))
-        else:
-            text = child.get_text(separator=" ", strip=True)
-            if text:
-                section = " > ".join(h for _, h in heading_stack)
-                blocks.append((text, section))
-
-    return blocks
-
-
-def _split_long_text(text: str, max_chars: int = _PARA_MAX_CHARS) -> list[str]:
-    """Split a single text into pieces at sentence boundaries.
-
-    Tries to split on Korean/English sentence endings (。, ., \n).
-    Falls back to word boundaries, then hard cut.
-    """
-    if len(text) <= max_chars:
-        return [text]
-
-    pieces: list[str] = []
-    remaining = text
-
-    while len(remaining) > max_chars:
-        window = remaining[:max_chars]
-        split_pos = -1
-
-        for sep in ["。", ".", "다.", "음.", "임.", "\n", " "]:
-            idx = window.rfind(sep)
-            if idx > max_chars * 0.3:
-                split_pos = idx + len(sep)
-                break
-
-        if split_pos <= 0:
-            split_pos = max_chars
-
-        pieces.append(remaining[:split_pos].strip())
-        remaining = remaining[split_pos:].strip()
-
-    if remaining:
-        pieces.append(remaining)
-
-    return pieces
-
-
-def _split_html_by_paragraphs(
-    page_html: str,
-    pdf_name: str,
-    page_num: int,
-) -> list[tuple[str, str, str]]:
-    raw_blocks = _extract_blocks_with_headings(page_html)
-
-    if not raw_blocks:
-        return []
-
-    merged: list[tuple[str, str]] = []
-    for text, section in raw_blocks:
-        if merged and len(text) < _PARA_MIN_CHARS:
-            merged[-1] = (merged[-1][0] + " " + text, merged[-1][1] or section)
-        else:
-            merged.append((text, section))
-
-    final_blocks: list[tuple[str, str]] = []
-    for text, section in merged:
-        for piece in _split_long_text(text):
-            final_blocks.append((piece, section))
-
-    result: list[tuple[str, str, str]] = []
-    safe_pdf = re.sub(r"[^a-zA-Z0-9가-힣_-]", "_", pdf_name)
-    for i, (text, section) in enumerate(final_blocks):
-        if not text.strip():
-            continue
-        para_id = f"{safe_pdf}_p{page_num}_para{i + 1}"
-        result.append((text.strip(), para_id, section))
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -661,10 +366,9 @@ def _chunk_and_index_session(session_id: str) -> None:
 
     embeddings = _get_embeddings()
 
-    vector_store = _get_vector_store(
+    vector_store = TableVectorStore(
         embeddings=embeddings,
         persist_dir=new_dir,
-        session_id=session_id,
         collection_name=f"doc_chunks_{session_id}",
     )
 
@@ -674,10 +378,6 @@ def _chunk_and_index_session(session_id: str) -> None:
 
         docs.append(Document(page_content=chunk, metadata=meta))
 
-    try:
-        vector_store.reset()
-    except Exception:
-        pass
     vector_store.add_documents(docs, skip_existing=False)
 
     # Build BM25 index for keyword search
@@ -696,687 +396,74 @@ def _chunk_and_index_session(session_id: str) -> None:
             pass
 
 
-# ---------------------------------------------------------------------------
-# Multi-page table detection
-# ---------------------------------------------------------------------------
 
-_HEADER_KEYWORDS = frozenset([
-    "구분", "구 분", "계정", "주요계정", "연도", "종류", "항목", "구분",
-    "분류", "항목", "세목", "유형", "영업년도",
-])
 
 
-def _table_col_count(html: str) -> int:
-    m = re.search(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
-    return len(re.findall(r"<t[dh]", m.group(1))) if m else 0
 
 
-def _table_first_row(html: str) -> list[str]:
-    m = re.search(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
-    if not m:
-        return []
-    cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", m.group(1), re.DOTALL)
-    return [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
 
 
-def _row_has_numbers(row: list[str]) -> bool:
-    combined = " ".join(row)
-    return bool(re.search(r"[\d,]+\.?\d*", combined))
 
 
-def _row_has_header_keywords(row: list[str]) -> bool:
-    combined = " ".join(row)
-    return any(kw in combined for kw in _HEADER_KEYWORDS)
 
 
-def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
-    try:
-        import fitz
-    except ImportError:
-        return
 
-    if not pdf_path or not tables:
-        return
 
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception:
-        return
-
-    MAX_FITZ_TABLES = 200
-
-    by_page: dict[int, list[dict]] = {}
-    for t in tables:
-        pn = t.get("page_number", 0)
-        by_page.setdefault(pn, []).append(t)
-
-    used_fitz_global: set[tuple[int, int]] = set()
-
-    for pn, page_tables in by_page.items():
-        if pn < 1 or pn > len(doc):
-            continue
-
-        page = doc[pn - 1]
-        page_h = page.rect.height
-        page_w = page.rect.width
-        fitz_tables = page.find_tables().tables
-
-        fitz_data: list[tuple] = []
-        for fi, ft in enumerate(fitz_tables):
-            data = ft.extract()
-            ft_text = _normalize_text(" ".join(" ".join(str(c or "") for c in row) for row in data))
-            fitz_data.append((fi, ft, ft_text))
-
-        matched_fitz: set[int] = set()
-
-        for t in page_tables:
-            html_text = _normalize_text(_table_text_content(t.get("table_html", "")))
-            if not html_text:
-                continue
-
-            best_score = 0.0
-            best_fi = -1
-
-            for fi, ft, ft_text in fitz_data:
-                score = _table_match_score(html_text, ft_text)
-                if score > best_score:
-                    best_score = score
-                    best_fi = fi
-
-            if best_fi >= 0 and best_score > 0.15:
-                matched_fitz.add(best_fi)
-                ft = fitz_data[best_fi][1]
-                fbbox = list(ft.bbox)
-                pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
-
-                t["bounding_box"] = [round(v, 2) for v in pdf_bbox]
-
-                y_top_pymupdf = fbbox[1]
-                clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
-                text_above = page.get_text("text", clip=clip).strip()
-                if text_above and len(text_above) <= 150:
-                    last_line = text_above.split("\n")[-1].strip()
-                    if last_line and len(last_line) <= 80:
-                        if not t.get("table_title"):
-                            t["table_title"] = last_line
-
-                print(f"[enrich] {t.get('table_id')} p{pn}: matched fitz_t[{best_fi}] score={best_score:.2f}")
-
-        for fi, ft, ft_text in fitz_data:
-            if fi in matched_fitz:
-                continue
-            fbbox = list(ft.bbox)
-            fbbox_area = (fbbox[2] - fbbox[0]) * (fbbox[3] - fbbox[1])
-            if fbbox_area < 5000:
-                continue
-
-            is_inner = False
-            for fi2, ft2, _ in fitz_data:
-                if fi2 == fi:
-                    continue
-                obbox = list(ft2.bbox)
-                if (obbox[0] <= fbbox[0] and obbox[1] <= fbbox[1]
-                        and obbox[2] >= fbbox[2] and obbox[3] >= fbbox[3]):
-                    is_inner = True
-                    break
-            if is_inner:
-                continue
-
-            pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
-            data = ft.extract()
-            if not data:
-                continue
-
-            from bs4 import BeautifulSoup
-            html_parts = ["<table>"]
-            for ri, row in enumerate(data):
-                tag = "th" if ri == 0 else "td"
-                html_parts.append("<tr>" + "".join(f"<{tag}>{_escape_html(str(c or ''))}</{tag}>" for c in row) + "</tr>")
-            html_parts.append("</table>")
-            table_html = "".join(html_parts)
-
-            table_title = ""
-            y_top_pymupdf = fbbox[1]
-            clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
-            text_above = page.get_text("text", clip=clip).strip()
-            if text_above and len(text_above) <= 150:
-                last_line = text_above.split("\n")[-1].strip()
-                if last_line and len(last_line) <= 80:
-                    table_title = last_line
-
-            new_id = f"table_{pn}_fitz{fi}"
-            new_table = {
-                "table_id": new_id,
-                "page_number": pn,
-                "bounding_box": [round(v, 2) for v in pdf_bbox],
-                "table_html": table_html,
-                "table_title": table_title or None,
-                "document_name": tables[0].get("document_name", "") if tables else "",
-            }
-            tables.append(new_table)
-            print(f"[enrich] ADDED {new_id} p{pn}: bbox={new_table['bounding_box']} (PyMuPDF only, outer)")
-
-        if len(tables) > MAX_FITZ_TABLES:
-            print(f"[enrich] WARNING: too many tables ({len(tables)}), stopping PyMuPDF additions")
-            break
-
-    doc.close()
-
-
-def _escape_html(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
-def _normalize_text(text: str) -> str:
-    import re
-    text = text.lower()
-    text = re.sub(r'\s+', '', text)
-    return text
-
-
-def _table_text_content(html: str) -> str:
-    from bs4 import BeautifulSoup
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        return soup.get_text(separator=" ", strip=True)
-    except Exception:
-        return ""
-
-
-def _table_match_score(html_norm: str, fitz_norm: str) -> float:
-    if not html_norm or not fitz_norm:
-        return 0.0
-    if fitz_norm in html_norm:
-        return 0.9
-    if html_norm in fitz_norm:
-        return 0.9
-    html_words = set(html_norm)
-    fitz_words = set(fitz_norm)
-    if not html_words or not fitz_words:
-        return 0.0
-    intersection = html_words & fitz_words
-    union = html_words | fitz_words
-    return len(intersection) / len(union)
-
-
-def _extract_top_level_tables_with_nesting(html_path: str) -> list[dict]:
-    from bs4 import BeautifulSoup
-    try:
-        with open(html_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception:
-        return []
-
-    soup = BeautifulSoup(content, "html.parser")
-    result = []
-    for table_tag in soup.find_all("table"):
-        parent = table_tag.parent
-        is_nested = False
-        p = parent
-        while p:
-            if p.name == "td":
-                pp = p.parent
-                while pp:
-                    if pp.name == "table" and pp != table_tag:
-                        is_nested = True
-                        break
-                    pp = pp.parent
-                if is_nested:
-                    break
-            p = p.parent
-        if is_nested:
-            continue
-
-        has_inner = bool(table_tag.find("table"))
-        text = _normalize_text(table_tag.get_text(separator=" ", strip=True))
-        result.append({
-            "html": str(table_tag),
-            "text": text,
-            "has_nested_table": has_inner,
-        })
-    return result
-
-
-def _build_tables_from_pymupdf(
-    pdf_path: str,
-    hybrid_tables: list[dict],
-    standard_html_path: str | None,
-) -> list[dict]:
-    try:
-        import fitz
-    except ImportError:
-        return hybrid_tables
-
-    if not pdf_path:
-        return hybrid_tables
-
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception:
-        return hybrid_tables
-
-    doc_name = hybrid_tables[0].get("document_name", "") if hybrid_tables else ""
-
-    standard_tables: list[dict] = []
-    if standard_html_path:
-        standard_tables = _extract_top_level_tables_with_nesting(standard_html_path)
-    print(f"[build] standard HTML tables: {len(standard_tables)} (nested marked)")
-
-    hybrid_by_page: dict[int, list[dict]] = {}
-    for t in hybrid_tables:
-        pn = t.get("page_number", 0)
-        hybrid_by_page.setdefault(pn, []).append(t)
-
-    all_fitz: list[dict] = []
-    for page_idx in range(len(doc)):
-        pn = page_idx + 1
-        page = doc[page_idx]
-        page_h = page.rect.height
-        page_w = page.rect.width
-        fitz_tables = page.find_tables().tables
-
-        fitz_data = []
-        for fi, ft in enumerate(fitz_tables):
-            fbbox = list(ft.bbox)
-            area = (fbbox[2] - fbbox[0]) * (fbbox[3] - fbbox[1])
-            if area < 5000:
-                continue
-            data = ft.extract()
-            ft_text = _normalize_text(" ".join(" ".join(str(c or "") for c in row) for row in data))
-            pdf_bbox = [fbbox[0], page_h - fbbox[3], fbbox[2], page_h - fbbox[1]]
-            fitz_data.append({
-                "fi": fi, "ft": ft, "bbox": fbbox, "pdf_bbox": pdf_bbox,
-                "area": area, "text": ft_text, "data": data, "page": pn,
-            })
-
-        inner_indices = set()
-        for i, fd in enumerate(fitz_data):
-            for j, fd2 in enumerate(fitz_data):
-                if i == j:
-                    continue
-                b1, b2 = fd["bbox"], fd2["bbox"]
-                if (b2[0] <= b1[0] and b2[1] <= b1[1] and b2[2] >= b1[2] and b2[3] >= b1[3]):
-                    inner_indices.add(i)
-
-        for i, fd in enumerate(fitz_data):
-            fd["is_inner"] = i in inner_indices
-            all_fitz.append(fd)
-
-    outer_fitz = [f for f in all_fitz if not f["is_inner"]]
-    inner_fitz = [f for f in all_fitz if f["is_inner"]]
-
-    for o in outer_fitz:
-        o["inner_table_indices"] = []
-    for idx, inn in enumerate(inner_fitz):
-        for oi, o in enumerate(outer_fitz):
-            ob = o["bbox"]
-            ib = inn["bbox"]
-            if (ob[0] <= ib[0] and ob[1] <= ib[1] and ob[2] >= ib[2] and ob[3] >= ib[3]
-                    and o["page"] == inn["page"]):
-                o["inner_table_indices"].append(idx)
-                break
-
-    results: list[dict] = []
-    matched_hybrid_ids: set[str] = set()
-    matched_standard: set[int] = set()
-
-    for oi, o in enumerate(outer_fitz):
-        has_inner = len(o["inner_table_indices"]) > 0
-        table_html = ""
-        source = "none"
-        hybrid_bbox: list = []
-        hybrid_title = ""
-
-        if has_inner and standard_tables:
-            best_score = 0.0
-            best_si = -1
-            for si, st in enumerate(standard_tables):
-                if not st["has_nested_table"]:
-                    continue
-                if si in matched_standard:
-                    continue
-                score = _table_match_score(o["text"], st["text"])
-                if score > best_score:
-                    best_score = score
-                    best_si = si
-            if best_si >= 0 and best_score > 0.10:
-                table_html = standard_tables[best_si]["html"]
-                matched_standard.add(best_si)
-                source = "standard"
-                print(f"[build] outer p{o['page']} fitz[{o['fi']}] → standard[{best_si}] score={best_score:.2f} (nested)")
-
-        if not table_html:
-            best_score = 0.0
-            best_ht = None
-            page_hybrid = hybrid_by_page.get(o["page"], [])
-            for ht in page_hybrid:
-                if ht.get("table_id", "") in matched_hybrid_ids:
-                    continue
-                ht_bbox = ht.get("bounding_box", [])
-                if not ht_bbox or ht_bbox == [0, 0, 0, 0]:
-                    continue
-                html_text = _normalize_text(_table_text_content(ht.get("table_html", "")))
-                text_score = _table_match_score(html_text, o["text"])
-                score = text_score
-                ya1, ya2 = o["pdf_bbox"][1], o["pdf_bbox"][3]
-                yb1, yb2 = ht_bbox[1], ht_bbox[3]
-                overlap_start = max(ya1, yb1)
-                overlap_end = min(ya2, yb2)
-                if overlap_start < overlap_end:
-                    y_overlap = (overlap_end - overlap_start) / max(min(ya2 - ya1, yb2 - yb1), 1)
-                    score = text_score * (0.5 + 0.5 * y_overlap)
-                else:
-                    score = text_score * 0.1
-                if score > best_score:
-                    best_score = score
-                    best_ht = ht
-            if best_ht and best_score > 0.10:
-                table_html = best_ht.get("table_html", "")
-                matched_hybrid_ids.add(best_ht.get("table_id", ""))
-                hybrid_bbox = best_ht.get("bounding_box", [])
-                hybrid_title = best_ht.get("table_title", "")
-                source = "hybrid"
-                print(f"[build] outer p{o['page']} fitz[{o['fi']}] → hybrid score={best_score:.2f}")
-
-        if not table_html:
-            data = o.get("data", [])
-            if data:
-                html_parts = ["<table>"]
-                for ri, row in enumerate(data):
-                    tag = "th" if ri == 0 else "td"
-                    html_parts.append("<tr>" + "".join(f"<{tag}>{_escape_html(str(c or ''))}</{tag}>" for c in row) + "</tr>")
-                html_parts.append("</table>")
-                table_html = "".join(html_parts)
-                source = "pymupdf"
-                print(f"[build] outer p{o['page']} fitz[{o['fi']}] → pymupdf fallback")
-
-        title = hybrid_title or ""
-        if not title:
-            try:
-                title_page = doc[o["page"] - 1]
-                y_top = o["bbox"][1]
-                clip = fitz.Rect(0, max(0, y_top - 50), title_page.rect.width, y_top)
-                text_above = title_page.get_text("text", clip=clip).strip()
-                if text_above and len(text_above) <= 150:
-                    last_line = text_above.split("\n")[-1].strip()
-                    if last_line and len(last_line) <= 80:
-                        title = last_line
-            except Exception:
-                pass
-
-        inner_ids = []
-        for inner_idx in o.get("inner_table_indices", []):
-            inner_ids.append(f"fitz_p{inner_fitz[inner_idx]['page']}_{inner_fitz[inner_idx]['fi']}_inner")
-
-        final_bbox = [round(v, 2) for v in o["pdf_bbox"]]
-
-        results.append({
-            "table_id": f"fitz_p{o['page']}_{o['fi']}",
-            "page_number": o["page"],
-            "bounding_box": final_bbox,
-            "table_html": table_html,
-            "table_title": title or None,
-            "document_name": doc_name,
-            "has_inner_tables": has_inner,
-            "is_inner": False,
-            "outer_table_id": None,
-            "inner_table_ids": inner_ids,
-            "_source": source,
-        })
-
-    doc.close()
-
-    for pn, page_tables in hybrid_by_page.items():
-        for ht in page_tables:
-            ht_id = ht.get("table_id", "")
-            if ht_id in matched_hybrid_ids:
-                continue
-            ht_copy = dict(ht)
-            ht_copy["_source"] = "hybrid_fallback"
-            ht_bbox = ht_copy.get("bounding_box", [])
-            is_inner_hybrid = False
-            if ht_bbox and len(ht_bbox) >= 4 and ht_bbox != [0, 0, 0, 0]:
-                for r in results:
-                    r_bbox = r.get("bounding_box", [])
-                    if (r.get("page_number") == pn and r_bbox and len(r_bbox) >= 4
-                            and r_bbox[0] <= ht_bbox[0] and r_bbox[1] <= ht_bbox[1]
-                            and r_bbox[2] >= ht_bbox[2] and r_bbox[3] >= ht_bbox[3]):
-                        is_inner_hybrid = True
-                        break
-            if is_inner_hybrid:
-                print(f"[build] skip p{pn}: {ht_id} (inner of existing fitz table)")
-                continue
-            results.append(ht_copy)
-            print(f"[build] fallback p{pn}: {ht_id} (no PyMuPDF match, using hybrid)" +
-                   (" [inner]" if ht_copy.get("is_inner") else ""))
-
-    print(f"[build] RESULT: {len(results)} outer tables "
-          f"(standard={sum(1 for r in results if r['_source']=='standard')}, "
-          f"hybrid={sum(1 for r in results if r['_source']=='hybrid')}, "
-          f"pymupdf={sum(1 for r in results if r['_source']=='pymupdf')}, "
-          f"hybrid_fallback={sum(1 for r in results if r['_source']=='hybrid_fallback')})")
-    return results
-
-
-def _detect_multipage_tables(
-    tables: list[dict],
-) -> list[dict]:
-    outer_tables = [t for t in tables if not t.get("is_inner") and t.get("_source") != "hybrid_fallback"]
-
-    by_page: dict[int, list[dict]] = {}
-    for t in outer_tables:
-        pn = t.get("page_number", -1)
-        by_page.setdefault(pn, []).append(t)
-
-    sorted_pages = sorted(by_page.keys())
-
-    for pa in sorted_pages:
-        for t in by_page[pa]:
-            print(f"[multipage] table={t.get('table_id')} page={pa} bbox={t.get('bounding_box')}")
-
-    raw_pairs: list[tuple[str, str, bool]] = []
-
-    for pi in range(len(sorted_pages) - 1):
-        pa, pb = sorted_pages[pi], sorted_pages[pi + 1]
-        if pb != pa + 1:
-            continue
-
-        tables_a = by_page.get(pa, [])
-        tables_b = by_page.get(pb, [])
-        if not tables_a or not tables_b:
-            continue
-
-        last_on_a = None
-        last_bbox = [0, 9999, 0, 0]
-        for t in tables_a:
-            bbox = t.get("bounding_box", [0, 0, 0, 0])
-            if len(bbox) >= 4 and bbox != [0, 0, 0, 0] and bbox[1] < last_bbox[1]:
-                last_on_a = t
-                last_bbox = bbox
-
-        first_on_b = None
-        first_bbox = [0, 0, 0, 0]
-        for t in tables_b:
-            bbox = t.get("bounding_box", [0, 0, 0, 0])
-            if len(bbox) >= 4 and bbox != [0, 0, 0, 0] and bbox[3] > first_bbox[3]:
-                first_on_b = t
-                first_bbox = bbox
-
-        if not (last_on_a and first_on_b):
-            continue
-
-        bbox_a = last_on_a.get("bounding_box", [0, 0, 0, 0])
-        bbox_b = first_on_b.get("bounding_box", [0, 0, 0, 0])
-        if len(bbox_a) < 4 or len(bbox_b) < 4:
-            continue
-
-        a_near_bottom = bbox_a[1] < 200
-        b_near_top = bbox_b[3] > 400
-
-        if not (a_near_bottom and b_near_top):
-            print(f"[multipage] p{pa}→p{pb}: pos check failed, a_bottom={bbox_a[1]:.0f}({'✓' if a_near_bottom else '✗'}), b_top={bbox_b[3]:.0f}({'✓' if b_near_top else '✗'})")
-            continue
-
-        html_a = last_on_a.get("table_html", "") or last_on_a.get("html", "")
-        html_b = first_on_b.get("table_html", "") or first_on_b.get("html", "")
-        if not html_a or not html_b:
-            continue
-
-        cols_a = _table_col_count(html_a)
-        cols_b = _table_col_count(html_b)
-        same_cols = cols_a == cols_b and cols_a > 0
-        table_at_very_top = bbox_b[3] > 700
-        force_include = not same_cols and table_at_very_top
-
-        if not same_cols and not force_include:
-            print(f"[multipage] {last_on_a['table_id']}@p{pa}(cols={cols_a}) -> {first_on_b['table_id']}@p{pb}(cols={cols_b}) skipped (different cols)")
-            continue
-
-        raw_pairs.append((last_on_a["table_id"], first_on_b["table_id"], same_cols))
-        tag = "paired" if same_cols else "paired (cols differ, table at very top)"
-        print(f"[multipage] {last_on_a['table_id']}@p{pa}(cols={cols_a}) -> {first_on_b['table_id']}@p{pb}(cols={cols_b}) {tag}")
-
-    # Transitive closure: A→B, B→C => chain [A, B, C]
-    chains: list[list[str]] = []
-    table_to_chain: dict[str, int] = {}
-
-    for aid, bid, _ in raw_pairs:
-        a_chain = table_to_chain.get(aid)
-        b_chain = table_to_chain.get(bid)
-
-        if a_chain is not None and b_chain is not None:
-            if a_chain == b_chain:
-                continue
-            src, dst = (b_chain, a_chain) if len(chains[a_chain]) >= len(chains[b_chain]) else (a_chain, b_chain)
-            for tid in chains[src]:
-                table_to_chain[tid] = dst
-            chains[dst].extend(chains[src])
-            chains[src] = []
-        elif a_chain is not None:
-            chains[a_chain].append(bid)
-            table_to_chain[bid] = a_chain
-        elif b_chain is not None:
-            chains[b_chain].insert(0, aid)
-            table_to_chain[aid] = b_chain
-        else:
-            idx = len(chains)
-            chains.append([aid, bid])
-            table_to_chain[aid] = idx
-            table_to_chain[bid] = idx
-
-    chains = [c for c in chains if len(c) >= 2]
-
-    by_id = {t["table_id"]: t for t in tables}
-
-    results: list[dict] = []
-    for ci, chain in enumerate(chains):
-        gid = f"group_{ci}"
-
-        pair_cols: list[tuple[bool, int, int]] = []
-        for i in range(len(chain) - 1):
-            ta = by_id.get(chain[i], {})
-            tb = by_id.get(chain[i + 1], {})
-            html_a = ta.get("table_html", "") or ta.get("html", "")
-            html_b = tb.get("table_html", "") or tb.get("html", "")
-            cols_a = _table_col_count(html_a) if html_a else 0
-            cols_b = _table_col_count(html_b) if html_b else 0
-            pair_cols.append((cols_a == cols_b and cols_a > 0, cols_a, cols_b))
-
-        all_same = all(sc for sc, _, _ in pair_cols)
-
-        tables_info = []
-        for tid in chain:
-            t = by_id.get(tid, {})
-            tables_info.append({
-                "table_id": tid,
-                "page_number": t.get("page_number"),
-                "bounding_box": t.get("bounding_box", []),
-                "table_title": t.get("table_title"),
-                "table_html": t.get("table_html", ""),
-            })
-
-        results.append({
-            "group_id": gid,
-            "tables": tables_info,
-            "chain_length": len(chain),
-            "same_cols": all_same,
-            "pair_cols": pair_cols,
-        })
-
-        print(f"[multipage] chain {gid}: {' -> '.join(chain)} (all_same_cols={all_same})")
-
-    print(f"[multipage] RESULT: {len(raw_pairs)} pairs -> {len(chains)} chains")
-    return results
-
-
-def _apply_table_groups(
-    session: dict, pdf_name: str, tier1: list[tuple[str, str, str]],
-    tier2_confirmed: list[tuple[str, str, str]],
-) -> None:
-    tables = session["pdfs"][pdf_name].get("tables", [])
-    by_id = {t["table_id"]: t for t in tables}
-
-    for pairs in (tier1, tier2_confirmed):
-        for aid, bid, gid in pairs:
-            if aid in by_id:
-                by_id[aid]["group_id"] = gid
-            if bid in by_id:
-                by_id[bid]["group_id"] = gid
-
-
-def _merge_grouped_tables(tables: list[dict]) -> None:
-    from bs4 import BeautifulSoup
-
-    groups: dict[str, list[dict]] = {}
-    for t in tables:
-        gid = t.get("group_id")
-        if gid:
-            groups.setdefault(gid, []).append(t)
-
-    for gid, group_tables in groups.items():
-        if len(group_tables) < 2:
-            continue
-
-        group_table_ids = [t["table_id"] for t in group_tables]
-
-        soup_a = BeautifulSoup(group_tables[0].get("table_html", ""), "html.parser")
-        table_a = soup_a.find("table")
-        if not table_a:
-            continue
-
-        first_header_texts: list[str] = []
-        first_row_a = table_a.find("tr")
-        if first_row_a:
-            first_header_texts = [c.get_text(strip=True) for c in first_row_a.find_all(["td", "th"])]
-
-        for tb in group_tables[1:]:
-            soup_b = BeautifulSoup(tb.get("table_html", ""), "html.parser")
-            table_b = soup_b.find("table")
-            if not table_b:
-                continue
-
-            rows_b = table_b.find_all("tr")
-            cols_a = len(first_row_a.find_all(["td", "th"])) if first_row_a else 0
-
-            for row in rows_b:
-                cells = row.find_all(["td", "th"])
-                if cols_a > 0 and len(cells) == cols_a:
-                    row_texts = [c.get_text(strip=True) for c in cells]
-                    if row_texts == first_header_texts:
-                        continue
-                table_a.append(row)
-
-        merged_html = str(soup_a)
-
-        for t in group_tables:
-            t["merged_table_html"] = merged_html
-            t["group_table_ids"] = group_table_ids
 
 
 class ConfirmGroupRequest(BaseModel):
     pdf_name: str
     confirmed: list[dict]
     rejected: list[dict]
+
+
+@app.get("/api/auth/config")
+async def auth_config_endpoint() -> JSONResponse:
+    return JSONResponse(content=auth_config())
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest) -> JSONResponse:
+    client = ldap_client_from_settings()
+    user = client.authenticate(body.username, body.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    pre_auth = create_pre_auth_session(user)
+    return JSONResponse(
+        content={
+            "requires_otp": True,
+            "pre_auth_token": pre_auth.token,
+            "user": user.model_dump(),
+            **auth_config(),
+        }
+    )
+
+
+@app.post("/api/auth/otp")
+async def otp(body: OtpRequest) -> JSONResponse:
+    user = verify_otp(body.pre_auth_token, body.otp_code)
+    token, ttl_seconds = issue_auth_token(user)
+    response = JSONResponse(content={"user": user.model_dump(), **auth_config()})
+    set_auth_cookie(response, token, ttl_seconds)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def logout() -> JSONResponse:
+    response = JSONResponse(content={"ok": True})
+    clear_auth_cookie(response)
+    return response
+
+
+@app.get("/api/auth/me")
+async def me(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return JSONResponse(content={"user": current_user.model_dump(), **auth_config()})
+
+
+@app.post("/api/auth/touch")
+async def touch(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return JSONResponse(content={"ok": True, "user": current_user.model_dump(), **auth_config()})
 
 
 @app.post("/api/confirm-table-groups")
@@ -1436,16 +523,15 @@ async def list_sessions() -> JSONResponse:
 
 
 @app.post("/api/sessions")
-async def create_session(body: CreateSessionRequest) -> JSONResponse:
+async def create_session(body: CreateSessionRequest, request: Request) -> JSONResponse:
     session_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
-    chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
+    data_dir = tempfile.mkdtemp(prefix="pdf_data_")
 
     session: Dict[str, Any] = {
         "upload_dir": upload_dir,
-        "chroma_dir": chroma_dir,
-        "doc_chunks_dir": tempfile.mkdtemp(prefix="pdf_docchunks_"),
+        "data_dir": data_dir,
         "pdfs": {},
         "searcher": None,
         "name": body.name or "",
@@ -1454,7 +540,15 @@ async def create_session(body: CreateSessionRequest) -> JSONResponse:
         "total_pages": 0,
         "search_count": 0,
         "qa_count": 0,
+        "owner_id": None,
     }
+
+    try:
+        current_user_obj = await get_current_user(request)
+        session["owner_id"] = current_user_obj.user_id
+    except HTTPException:
+        pass
+
     _sessions[session_id] = session
 
     return JSONResponse(
@@ -1486,16 +580,12 @@ async def delete_session(session_id: str) -> JSONResponse:
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     session = _sessions.pop(session_id)
-    _cleanup_vector_indexes(session_id, session)
     upload_dir = session.get("upload_dir")
-    chroma_dir = session.get("chroma_dir")
-    doc_chunks_dir = session.get("doc_chunks_dir")
+    data_dir = session.get("data_dir")
     if upload_dir:
         shutil.rmtree(upload_dir, ignore_errors=True)
-    if chroma_dir:
-        shutil.rmtree(chroma_dir, ignore_errors=True)
-    if doc_chunks_dir:
-        shutil.rmtree(doc_chunks_dir, ignore_errors=True)
+    if data_dir:
+        shutil.rmtree(data_dir, ignore_errors=True)
     return JSONResponse(content={"deleted": session_id})
 
 
@@ -1947,14 +1037,14 @@ async def upload_pdfs(
     if session_id in _sessions:
         session = _sessions[session_id]
         upload_dir = session["upload_dir"]
-        chroma_dir = session["chroma_dir"]
+        data_dir = session["data_dir"]
     else:
         upload_dir = tempfile.mkdtemp(prefix="pdf_upload_")
-        chroma_dir = tempfile.mkdtemp(prefix="pdf_chroma_")
+        data_dir = tempfile.mkdtemp(prefix="pdf_data_")
         doc_chunks_dir = tempfile.mkdtemp(prefix="pdf_docchunks_")
         session: Dict[str, Any] = {
             "upload_dir": upload_dir,
-            "chroma_dir": chroma_dir,
+            "data_dir": data_dir,
             "doc_chunks_dir": doc_chunks_dir,
             "pdfs": {},
             "searcher": None,
@@ -2059,8 +1149,7 @@ async def upload_pdfs(
                     doc_meta["table_title"] = ft_title
                 all_docs.append(LCDocument(page_content=content, metadata=doc_meta))
                 pymupdf_only_count += 1
-        if pymupdf_only_count:
-            print(f"[index] Added {pymupdf_only_count} PyMuPDF-only tables for {filename}")
+
 
         session["pdfs"][filename] = {
             "path": str(dest),
@@ -2089,10 +1178,9 @@ async def upload_pdfs(
 
     if total_tables > 0 and all_docs:
         embeddings = _get_embeddings()
-        vector_store = _get_vector_store(
+        vector_store = TableVectorStore(
             embeddings=embeddings,
-            persist_dir=chroma_dir,
-            session_id=session_id,
+            persist_dir=data_dir,
         )
         # Only reset if this is a fresh session (no existing PDFs before this upload)
         if not session_has_existing_pdfs:
@@ -2154,21 +1242,6 @@ async def delete_pdf(
     if pdf_path:
         Path(pdf_path).unlink(missing_ok=True)
 
-    embeddings = _embeddings or _CleanupEmbeddings()
-    table_store = _get_vector_store(
-        embeddings=embeddings,
-        persist_dir=session["chroma_dir"],
-        session_id=x_session_id,
-    )
-    table_store.delete_where({"document_name": filename})
-    doc_store = _get_vector_store(
-        embeddings=embeddings,
-        persist_dir=session["doc_chunks_dir"],
-        session_id=x_session_id,
-        collection_name=f"doc_chunks_{x_session_id}",
-    )
-    doc_store.delete_where({"source_pdf": filename})
-
     pdfs = [
         {"name": name, "table_count": info["table_count"]}
         for name, info in session["pdfs"].items()
@@ -2187,7 +1260,7 @@ async def search(
     session["search_count"] = session.get("search_count", 0) + 1
     start = time.time()
 
-    chroma_dir = session["chroma_dir"]
+    data_dir = session["data_dir"]
     if not session["pdfs"]:
         return JSONResponse(
             content={"results": [], "total": 0, "time_seconds": 0.0}
@@ -2195,10 +1268,9 @@ async def search(
 
     try:
         embeddings = _get_embeddings()
-        vector_store = _get_vector_store(
+        vector_store = TableVectorStore(
             embeddings=embeddings,
-            persist_dir=chroma_dir,
-            session_id=x_session_id,
+            persist_dir=data_dir,
         )
 
         search_results = vector_store.similarity_search(
@@ -2239,7 +1311,7 @@ async def smart_search_endpoint(
         first_pdf = next(iter(session["pdfs"].values()))
         pdf_path = first_pdf["path"]
 
-    chroma_dir = session["chroma_dir"]
+    data_dir = session["data_dir"]
     queue: list[str] = []
 
     def progress_callback(phase: str, message: str, pct: int) -> None:
@@ -2252,10 +1324,9 @@ async def smart_search_endpoint(
     def generate():
         try:
             embeddings = _get_embeddings()
-            vector_store = _get_vector_store(
+            vector_store = TableVectorStore(
                 embeddings=embeddings,
-                persist_dir=chroma_dir,
-                session_id=x_session_id,
+                persist_dir=data_dir,
             )
 
             progress_callback("vector", "벡터 검색 중...", 20)
@@ -2588,10 +1659,9 @@ async def ask_document(
 
     embeddings = _get_embeddings()
 
-    vector_store = _get_vector_store(
+    vector_store = TableVectorStore(
         embeddings=embeddings,
         persist_dir=session["doc_chunks_dir"],
-        session_id=x_session_id,
         collection_name=f"doc_chunks_{x_session_id}",
     )
 
@@ -2958,19 +2028,17 @@ async def unified_search_endpoint(
         try:
             # --- Phase 1: Vector search on pdf_tables ---
             progress_callback("vector", "문서 검색 중...", 20)
-            table_store = _get_vector_store(
+            table_store = TableVectorStore(
                 embeddings=embeddings,
-                persist_dir=session["chroma_dir"],
-                session_id=x_session_id,
+                persist_dir=session["data_dir"],
             )
             table_results = table_store.similarity_search(query=body.query, k=15)
 
             # --- Phase 2: Hybrid search on doc_chunks ---
             progress_callback("text", "텍스트 검색 중...", 40)
-            doc_store = _get_vector_store(
+            doc_store = TableVectorStore(
                 embeddings=embeddings,
                 persist_dir=session["doc_chunks_dir"],
-                session_id=x_session_id,
                 collection_name=f"doc_chunks_{x_session_id}",
             )
             doc_vector_results = doc_store.similarity_search(query=body.query, k=8)
@@ -3055,7 +2123,7 @@ async def unified_search_endpoint(
                     session_table = None
                     for _pn, _pinfo in session.get("pdfs", {}).items():
                         for st in _pinfo.get("tables", []):
-                            if st.get("table_id") == table_id:
+                            if st.get("table_id") == table_id or st.get("hybrid_table_id") == table_id:
                                 session_table = st
                                 resolved_pdf_name = _pn
                                 break
@@ -3228,16 +2296,22 @@ async def unified_search_endpoint(
                 }
                 for _pn, _pinfo in session.get("pdfs", {}).items():
                     for st in _pinfo.get("tables", []):
-                        if st.get("table_id") == tid:
+                        st_tid = st.get("table_id", "")
+                        st_hid = st.get("hybrid_table_id", "")
+                        if st_tid == tid or st_hid == tid:
                             if st.get("merged_table_html"):
                                 serialized["table_html"] = mask_pii_in_html(st["merged_table_html"])
                                 serialized["merged_table_html"] = serialized["table_html"]
                             elif st.get("table_html"):
                                 serialized["table_html"] = mask_pii_in_html(st["table_html"])
+                            else:
+                                pass
                             break
                     else:
                         continue
                     break
+                else:
+                    pass
                 referenced_tables.append(serialized)
 
             result_data = json.dumps({

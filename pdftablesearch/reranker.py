@@ -1,9 +1,8 @@
-"""
-LLM-based re-ranking compressor for LangChain retrieval.
+"""LLM 기반 리랭킹 컴프레서.
 
-Provides ``ZaiRerankCompressor``, which uses the z.ai LLM API to re-rank
-candidate documents retrieved by vector similarity search. Falls back
-gracefully to the original ordering on API failures.
+z.ai LLM API를 사용하여 벡터 유사도 검색 결과를 리랭킹하는
+``ZaiRerankCompressor``와 로컬 CrossEncoder 기반 ``CrossEncoderReranker``를 제공한다.
+API 장애 시 원래 순서로 graceful fallback한다.
 """
 
 from __future__ import annotations
@@ -59,16 +58,10 @@ Respond with ONLY the JSON array, no additional text."""
 # ---------------------------------------------------------------------------
 
 def _parse_rerank_response(response_text: str) -> List[dict[str, Any]]:
-    """Parse the LLM re-ranking response into structured results.
+    """LLM 리랭킹 응답을 구조화된 결과로 파싱한다.
 
-    Handles various response formats including markdown code blocks
-    and extra text around the JSON array.
-
-    Args:
-        response_text: Raw LLM response text.
-
-    Returns:
-        List of dictionaries with ``index`` and ``score`` keys.
+    마크다운 코드 블록이나 JSON 배열 주변 여분 텍스트 등
+    다양한 응답 형식을 처리한다.
     """
     content = response_text.strip()
 
@@ -100,27 +93,10 @@ def _parse_rerank_response(response_text: str) -> List[dict[str, Any]]:
 
 
 class ZaiRerankCompressor:
-    """LLM-based document re-ranker for search result refinement.
+    """LLM 기반 문서 리랭커 — 검색 결과 정제.
 
-    Uses the z.ai LLM API to re-score and re-order candidate documents
-    from vector similarity search. Implements a LangChain-compatible
-    ``compress_documents`` interface.
-
-    Args:
-        api_key: z.ai API key. Falls back to ``ZAI_API_KEY`` env var.
-        llm_endpoint: URL of the LLM API endpoint.
-        model: LLM model name.
-        top_k: Maximum number of documents to return after re-ranking.
-        timeout: LLM API timeout in seconds.
-        llm: Pre-configured LangChain LLM instance. If provided,
-            *api_key*, *llm_endpoint*, and *model* are ignored.
-
-    Example::
-
-        from pdftablesearch.reranker import ZaiRerankCompressor
-
-        compressor = ZaiRerankCompressor(api_key="your-key")
-        reranked = compressor.compress_documents(candidates, "search query")
+    z.ai LLM API로 벡터 유사도 검색 후보 문서를 재평가·재정렬한다.
+    LangChain 호환 ``compress_documents`` 인터페이스를 구현한다.
     """
 
     def __init__(
@@ -147,14 +123,7 @@ class ZaiRerankCompressor:
             )
 
     def _build_table_contexts(self, documents: List[Document]) -> str:
-        """Build numbered table descriptions for the re-ranking prompt.
-
-        Args:
-            documents: Candidate documents to describe.
-
-        Returns:
-            Formatted string with numbered table summaries.
-        """
+        """리랭킹 프롬프트용 번호가 매겨진 표 설명을 생성한다."""
         contexts: List[str] = []
         for i, doc in enumerate(documents, 1):
             table_id = doc.metadata.get("table_id", f"unknown_{i}")
@@ -171,20 +140,10 @@ class ZaiRerankCompressor:
         query: str,
         callbacks: Optional[Callbacks] = None,
     ) -> Sequence[Document]:
-        """Re-rank documents using the z.ai LLM API.
+        """z.ai LLM API로 문서를 리랭킹한다.
 
-        Sends the query and candidate documents to the LLM, which returns
-        a ranked list with relevance scores. On any failure, returns the
-        original documents unchanged.
-
-        Args:
-            documents: Candidate documents from vector search.
-            query: Original search query.
-            callbacks: Optional LangChain callbacks (currently unused).
-
-        Returns:
-            Re-ordered (and potentially filtered) documents with updated
-            ``rerank_score`` in metadata.
+        쿼리와 후보 문서를 LLM에 보내 관련성 점수가 매겨진 순위 목록을 받는다.
+        실패 시 원래 문서 순서를 그대로 반환한다.
         """
         if not documents:
             return []
@@ -261,13 +220,10 @@ def _get_cross_encoder():
 
 
 class CrossEncoderReranker:
-    """Local CrossEncoder reranker using msmarco-MiniLM-L-6-v2.
+    """로컬 CrossEncoder 리랭커 (msmarco-MiniLM-L-6-v2).
 
-    Fast CPU reranking (~45ms for 30 candidates) for improving search
-    result quality after initial vector/BM25 retrieval.
-
-    Args:
-        top_k: Maximum number of documents to return.
+    CPU 기반 빠른 리랭킹 (~45ms/30후보)으로 벡터/BM25 검색 후
+    결과 품질을 향상시킨다.
     """
 
     def __init__(self, top_k: int = 10) -> None:

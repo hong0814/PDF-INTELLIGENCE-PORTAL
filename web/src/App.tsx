@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AuthConfig, AuthStatus, TableGroupSuggestion } from './types';
+import type { AuthConfig, AuthUser, LoginPreAuthResponse, TableGroupSuggestion } from './types';
 import * as api from './api/client';
-import { BASE } from './api/client';
 import { useAppStore } from './store/useAppStore';
 import Sidebar from './components/Sidebar';
 import MainScreen from './components/MainScreen';
@@ -12,13 +11,16 @@ import CreditReviewView from './components/CreditReviewView';
 import UnifiedSearchView from './components/UnifiedSearchView';
 import TranslationView from './components/TranslationView';
 import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
-import LoginScreen from './components/LoginScreen';
-import SessionTimeoutGuard from './components/SessionTimeoutGuard';
+import LoginView from './components/LoginView';
+import OtpOverlay from './components/OtpOverlay';
 import AgreementOverlay from './components/AgreementOverlay';
+import SessionTimeoutGuard from './components/SessionTimeoutGuard';
 
 const AGREEMENT_ACCEPTED_KEY = 'pdf_portal_agreement_accepted';
 
 export default function App() {
+  const user = useAppStore((s) => s.user);
+  const authLoading = useAppStore((s) => s.authLoading);
   const sessionId = useAppStore((s) => s.sessionId);
   const pdfs = useAppStore((s) => s.pdfs);
   const totalTables = useAppStore((s) => s.totalTables);
@@ -27,6 +29,9 @@ export default function App() {
   const removePdf = useAppStore((s) => s.removePdf);
   const setPdfs = useAppStore((s) => s.setPdfs);
   const setSession = useAppStore((s) => s.setSession);
+  const setUser = useAppStore((s) => s.setUser);
+  const setAuthLoading = useAppStore((s) => s.setAuthLoading);
+  const clearAuth = useAppStore((s) => s.clearAuth);
   const setUploading = useAppStore((s) => s.setUploading);
   const restoreFromStorage = useAppStore((s) => s.restoreFromStorage);
   const reset = useAppStore((s) => s.reset);
@@ -35,108 +40,117 @@ export default function App() {
   const prevSessionIdRef = useRef(sessionId);
 
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
-  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpSubmitting, setOtpSubmitting] = useState(false);
+  const [preAuth, setPreAuth] = useState<LoginPreAuthResponse | null>(null);
+  const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
-  const [pendingAuthStatus, setPendingAuthStatus] = useState<AuthStatus | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-
-  const isAuthenticated = authStatus?.authenticated === true;
 
   useEffect(() => {
     let cancelled = false;
-    const loadAuth = async () => {
-      try {
-        const config = await api.getAuthConfig();
-        if (cancelled) return;
-        setAuthConfig(config);
-        if (!config.enabled) {
-          setAuthStatus({ authenticated: true, user: null, ...config });
-          return;
-        }
-        const status = await api.getCurrentAuth();
-        if (!cancelled) {
-          setAuthConfig(status);
-          if (sessionStorage.getItem(AGREEMENT_ACCEPTED_KEY) === '1') {
-            setAuthStatus(status);
-          } else {
-            setPendingAuthStatus(status);
-          }
-        }
-      } catch {
-        if (!cancelled) setAuthStatus(null);
-      } finally {
-        if (!cancelled) setIsAuthChecking(false);
+    setAuthLoading(true);
+    api.getAuthConfig().then((config) => {
+      if (cancelled) return null;
+      setAuthConfig(config);
+      return api.getCurrentAuth();
+    }).then((status) => {
+      if (cancelled || status === null) return;
+      const nextUser = status.user;
+      setAuthConfig(status);
+      if (cancelled) return;
+      if (sessionStorage.getItem(AGREEMENT_ACCEPTED_KEY) === '1') {
+        setUser(nextUser);
+      } else {
+        setPendingUser(nextUser);
       }
-    };
-    void loadAuth();
+      setLoginError(null);
+    }).catch(() => {
+      if (cancelled) return;
+      clearAuth();
+    }).finally(() => {
+      if (cancelled) return;
+      setAuthLoading(false);
+    });
     return () => { cancelled = true; };
-  }, []);
+  }, [clearAuth, setAuthLoading, setUser]);
 
-  const handleLogin = useCallback((status: AuthStatus) => {
-    setAuthConfig(status);
-    setPendingAuthStatus(status);
-  }, []);
+  const handleLogin = useCallback(async (username: string, password: string) => {
+    setLoginSubmitting(true);
+    setLoginError(null);
+    setOtpError(null);
+    try {
+      const nextPreAuth = await api.login({ username, password });
+      setPreAuth(nextPreAuth);
+      setAuthConfig(nextPreAuth);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : '로그인에 실패했습니다.');
+    } finally {
+      setLoginSubmitting(false);
+      setAuthLoading(false);
+    }
+  }, [setAuthLoading]);
+
+  const handleOtpSubmit = useCallback(async (otpCode: string) => {
+    if (!preAuth) throw new Error('OTP 세션이 없습니다.');
+    setOtpSubmitting(true);
+    setOtpError(null);
+    try {
+      const status = await api.verifyOtp(preAuth.pre_auth_token, otpCode);
+      setAuthConfig(status);
+      setPendingUser(status.user);
+      setPreAuth(null);
+    } catch (error) {
+      setOtpError(error instanceof Error ? error.message : 'OTP 인증에 실패했습니다.');
+      throw error;
+    } finally {
+      setOtpSubmitting(false);
+    }
+  }, [preAuth]);
 
   const handleAuthExpired = useCallback(() => {
-    setAuthStatus(null);
-    setPendingAuthStatus(null);
     sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
-    localStorage.removeItem('pdftablesearch_session_id');
-    useAppStore.setState({
-      activeTab: 'main',
-      sessionId: '',
-      sessionName: '',
-      pdfs: [],
-      totalTables: 0,
-      totalPages: 0,
-      selectedPdfs: [],
-      results: [],
-      smartResult: null,
-      qaMessages: [],
-      tableQAs: {},
-      unifiedResult: null,
-      unifiedFollowups: [],
-      isLoading: false,
-      isUnifiedSearchLoading: false,
-      documentChunksReady: false,
-      highlightRegion: null,
-    });
-  }, []);
+    setPreAuth(null);
+    setPendingUser(null);
+    clearAuth();
+  }, [clearAuth]);
 
   const handleAgreementConfirm = useCallback(() => {
-    if (!pendingAuthStatus) return;
+    if (!pendingUser) return;
     sessionStorage.setItem(AGREEMENT_ACCEPTED_KEY, '1');
-    setAuthStatus(pendingAuthStatus);
-    setAuthConfig(pendingAuthStatus);
-    setPendingAuthStatus(null);
-  }, [pendingAuthStatus]);
+    setUser(pendingUser);
+    setPendingUser(null);
+  }, [pendingUser, setUser]);
 
   const handleAgreementCancel = useCallback(() => {
-    setPendingAuthStatus(null);
+    setPendingUser(null);
     sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
     void api.logout().finally(handleAuthExpired);
+  }, [handleAuthExpired]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await api.logout();
+    } finally {
+      handleAuthExpired();
+    }
   }, [handleAuthExpired]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
     try {
-      const res = await api.apiFetch(`${BASE}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      const data = await res.json();
+      const data = await api.createSession(name);
       if (data.session_id) {
         localStorage.setItem('pdftablesearch_session_id', data.session_id);
         did404Ref.current = false;
         setSession(data.session_id, data.name || name);
       }
-    } catch (e) {
+    } catch {
       alert('세션 생성 실패');
     }
   }, [setSession]);
 
-  // Reset did404 flag when sessionId changes (e.g. via sidebar switchSession)
   useEffect(() => {
     if (sessionId && sessionId !== prevSessionIdRef.current) {
       did404Ref.current = false;
@@ -145,7 +159,7 @@ export default function App() {
   }, [sessionId]);
 
   useEffect(() => {
-    if (!isAuthenticated || !sessionId || did404Ref.current) return;
+    if (!sessionId || did404Ref.current) return;
     let cancelled = false;
     api.listPdfs(sessionId).then((data) => {
       if (cancelled) return;
@@ -160,15 +174,22 @@ export default function App() {
       if (cancelled) return;
       if (err instanceof Error) {
         const msg = err.message || String(err);
-        if (msg.includes('404') || msg.includes('Session not found')) {
+        if (
+          msg.includes('404')
+          || msg.includes('403')
+          || msg.includes('Session not found')
+          || msg.includes('Not authorized for this session')
+        ) {
           did404Ref.current = true;
           setSession('', '');
           localStorage.removeItem('pdftablesearch_session_id');
+        } else if (msg.includes('401') || msg.includes('Not authenticated')) {
+          clearAuth();
         }
       }
     });
     return () => { cancelled = true; };
-  }, [isAuthenticated, sessionId, setPdfs, setSession, restoreFromStorage]);
+  }, [clearAuth, sessionId, setPdfs, setSession, restoreFromStorage]);
 
   const handleUploadComplete = useCallback((_sid: string, pdfData: Record<string, { table_count: number; page_count: number }>, totalTables: number, totalPages: number) => {
     const pdfList = Object.entries(pdfData).map(([name, info]) => ({
@@ -240,19 +261,32 @@ export default function App() {
     minHeight: 0,
   });
 
-  if (isAuthChecking) {
+  if (authLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface text-sm text-text-secondary">
-        로그인 상태 확인 중...
+      <div className="min-h-screen bg-surface flex items-center justify-center text-text-secondary">
+        인증 상태를 확인하는 중입니다...
       </div>
     );
   }
 
-  if (!isAuthenticated) {
+  if (!user) {
     return (
       <>
-        <LoginScreen onLogin={handleLogin} />
-        {pendingAuthStatus && (
+        <LoginView
+          error={loginError}
+          isSubmitting={loginSubmitting}
+          onSubmit={handleLogin}
+        />
+        {preAuth && (
+          <OtpOverlay
+            preAuth={preAuth}
+            isSubmitting={otpSubmitting}
+            error={otpError}
+            onCancel={() => { setPreAuth(null); setOtpError(null); }}
+            onSubmit={handleOtpSubmit}
+          />
+        )}
+        {pendingUser && (
           <AgreementOverlay
             onCancel={handleAgreementCancel}
             onConfirm={handleAgreementConfirm}
@@ -265,6 +299,15 @@ export default function App() {
   if (!sessionId) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-surface px-6">
+        <div className="absolute top-6 right-6 flex items-center gap-3">
+          <span className="text-sm text-text-muted">{user.name || user.username}</span>
+          <button
+            onClick={handleLogout}
+            className="px-3 py-2 rounded-lg border border-border text-sm text-text-secondary hover:text-text-primary hover:bg-surface-elevated transition-colors"
+          >
+            로그아웃
+          </button>
+        </div>
         <div className="w-20 h-20 bg-surface-elevated border border-border rounded-2xl flex items-center justify-center mb-6">
           <svg className="w-10 h-10 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -272,21 +315,13 @@ export default function App() {
         </div>
         <h1 className="text-2xl font-bold text-text-primary mb-2">PDF Intelligence Portal</h1>
         <p className="text-sm text-text-muted mb-8">AI 기반 문서 분석 & 질의응답을 시작하려면 세션을 만들어주세요</p>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleCreateSession}
-            className="px-8 py-3 bg-primary text-white rounded-md text-base font-medium hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
-          >
-            새 세션 시작하기
-          </button>
-          <button
-            onClick={() => { void api.logout().finally(handleAuthExpired); }}
-            className="px-5 py-3 border border-border text-text-secondary rounded-md text-base font-medium hover:bg-surface-elevated transition-colors"
-          >
-            로그아웃
-          </button>
-        </div>
-        {authConfig?.enabled && (
+        <button
+          onClick={handleCreateSession}
+          className="px-8 py-3 bg-primary text-white rounded-xl text-base font-medium hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
+        >
+          새 세션 시작하기
+        </button>
+        {authConfig && (
           <SessionTimeoutGuard config={authConfig} onExpired={handleAuthExpired} />
         )}
       </div>
@@ -306,7 +341,7 @@ export default function App() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TabBar />
-        <SessionHeader onLogout={() => { void api.logout().finally(handleAuthExpired); }} />
+        <SessionHeader onLogout={handleLogout} />
 
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <div style={tabStyle('main')} className="overflow-y-auto p-6">
@@ -337,7 +372,7 @@ export default function App() {
           onComplete={() => { setTableGroupSuggestions([]); useAppStore.getState().bumpOverlayVersion(); }}
         />
       )}
-      {authConfig?.enabled && (
+      {authConfig && (
         <SessionTimeoutGuard config={authConfig} onExpired={handleAuthExpired} />
       )}
     </div>

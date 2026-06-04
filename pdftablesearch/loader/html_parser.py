@@ -1,8 +1,7 @@
-"""HTML table extraction, sanitization, and conversion.
+"""HTML 표 추출, 정제, 변환.
 
-Provides helpers to extract tables from HTML files produced by
-opendataloader-pdf, sanitize them for safe rendering, and convert
-them to Markdown fallback format.
+opendataloader-pdf가 생성한 HTML 파일에서 표를 추출하고,
+안전한 렌더링을 위해 정제하며, Markdown 폴백 형식으로 변환한다.
 """
 
 from __future__ import annotations
@@ -16,11 +15,9 @@ from bs4 import BeautifulSoup
 def extract_html_tables_from_file(
     html_path: "Path",
 ) -> List[Tuple[str, int, Optional[str], Optional[str]]]:
-    """Extract all ``<table>`` elements from an HTML file.
+    """HTML 파일에서 모든 ``<table>`` 요소를 추출한다.
 
-    Returns list of (table_html, index, title, context) tuples.
-    The title is the text of the nearest h1-h6 tag preceding the table.
-    The context is surrounding text from sibling elements before the table.
+    (table_html, index, title, context) 튜플 리스트를 반환한다.
     """
     from pathlib import Path
 
@@ -89,7 +86,7 @@ def extract_html_tables_from_file(
 
 
 def extract_table_text_content(html_table: str) -> str:
-    """Extract normalized text content from an HTML table for similarity matching."""
+    """유사도 매칭을 위해 HTML 표에서 정규화된 텍스트를 추출한다."""
     soup = BeautifulSoup(html_table, "html.parser")
     table = soup.find("table")
     if not table:
@@ -107,7 +104,7 @@ def extract_table_text_content(html_table: str) -> str:
 
 
 def sanitize_table_html(table_html: str) -> str:
-    """Remove script tags, event handlers, and javascript: URLs from an HTML table."""
+    """HTML 표에서 script 태그, 이벤트 핸들러, javascript: URL을 제거한다."""
     soup = BeautifulSoup(table_html, "html.parser")
 
     for script in soup.find_all("script"):
@@ -133,9 +130,9 @@ def sanitize_table_html(table_html: str) -> str:
 
 
 def html_table_to_markdown(table_html: str) -> str:
-    """Convert an HTML table to a simplified Markdown representation.
+    """HTML 표를 간단한 Markdown 표현으로 변환한다.
 
-    Merged cells (colspan/rowspan) are expanded by repeating content.
+    병합 셀(colspan/rowspan)은 내용 반복으로 확장한다.
     """
     soup = BeautifulSoup(table_html, "html.parser")
     table = soup.find("table")

@@ -1,9 +1,7 @@
-"""
-Custom LangChain Embeddings class for z.ai API.
+"""z.ai API 기반 LangChain 임베딩 클래스.
 
-Provides ``ZaiEmbeddings``, an implementation of
-:class:`langchain_core.embeddings.Embeddings` that calls the z.ai embedding
-endpoint with retry logic and batch support.
+재시도 로직과 배치 처리를 지원하는
+:class:`langchain_core.embeddings.Embeddings` 구현체.
 """
 
 from __future__ import annotations
@@ -30,10 +28,6 @@ from pdftablesearch.utils import get_api_key, get_logger, get_retry_config
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Default configuration
-# ---------------------------------------------------------------------------
-
 _DEFAULT_EMBEDDING_ENDPOINT = "https://api.z.ai/api/embeddings"
 _DEFAULT_MODEL = "embedding-3"
 _DEFAULT_TIMEOUT = 30
@@ -41,27 +35,17 @@ _DEFAULT_BATCH_SIZE = 20
 
 
 class ZaiEmbeddings(Embeddings):
-    """LangChain-compatible Embeddings class backed by the z.ai API.
+    """z.ai API 기반 LangChain 임베딩 클래스.
 
-    Supports both single-query embedding (``embed_query``) and batch
-    document embedding (``embed_documents``) with automatic retries,
-    configurable batch sizes, and structured error handling.
+    단일 쿼리(``embed_query``) 및 배치 문서(``embed_documents``) 임베딩을 지원하며,
+    자동 재시도, 배치 크기 설정, 구조화된 오류 처리를 제공한다.
 
-    Args:
-        api_key: z.ai API key. Falls back to the ``ZAI_API_KEY``
-            environment variable.
-        model: Embedding model name to pass to the API.
-        endpoint: URL of the embeddings endpoint.
-        timeout: HTTP request timeout in seconds.
-        batch_size: Maximum number of texts per batch request.
-
-    Example::
-
-        from pdftablesearch.embeddings import ZaiEmbeddings
-
-        emb = ZaiEmbeddings(api_key="your-key")
-        vectors = emb.embed_documents(["hello", "world"])
-        query_vec = emb.embed_query("search term")
+    매개변수:
+        api_key: z.ai API 키. 미지정 시 ``ZAI_API_KEY`` 환경변수 사용.
+        model: API에 전달할 임베딩 모델명.
+        endpoint: 임베딩 엔드포인트 URL.
+        timeout: HTTP 요청 타임아웃(초).
+        batch_size: 배치당 최대 텍스트 수.
     """
 
     def __init__(
@@ -86,25 +70,20 @@ class ZaiEmbeddings(Embeddings):
             }
         )
 
-    # -- Internal helpers ----------------------------------------------------
-
     def _call_embedding_api(self, texts: List[str]) -> List[List[float]]:
-        """Call the z.ai embedding API for a list of texts.
+        """z.ai 임베딩 API를 호출한다.
 
-        Sends texts in a single request and returns the corresponding
-        embedding vectors.
+        매개변수:
+            texts: 임베딩할 문자열 목록.
 
-        Args:
-            texts: List of strings to embed.
+        반환:
+            임베딩 벡터 목록.
 
-        Returns:
-            List of embedding vectors (one per input text).
-
-        Raises:
-            APIAuthenticationError: On 401/403 responses.
-            RateLimitError: On 429 responses.
-            APIConnectionError: On network failures.
-            APIError: On other HTTP errors.
+        예외:
+            APIAuthenticationError: 401/403 응답 시.
+            RateLimitError: 429 응답 시.
+            APIConnectionError: 네트워크 장애 시.
+            APIError: 기타 HTTP 오류 시.
         """
         payload: dict[str, Any] = {
             "input": texts if len(texts) > 1 else texts[0],
@@ -126,7 +105,6 @@ class ZaiEmbeddings(Embeddings):
                 f"Embedding API request timed out after {self.timeout}s: {exc}"
             ) from exc
 
-        # Handle HTTP errors
         if response.status_code == 401 or response.status_code == 403:
             raise APIAuthenticationError(
                 "Authentication failed. Check your ZAI_API_KEY.",
@@ -146,8 +124,6 @@ class ZaiEmbeddings(Embeddings):
 
         data = response.json()
         embedding_data = data.get("data", [])
-
-        # Sort by index to maintain order
         embedding_data.sort(key=lambda x: x.get("index", 0))
         return [item["embedding"] for item in embedding_data]
 
@@ -158,33 +134,23 @@ class ZaiEmbeddings(Embeddings):
         reraise=True,
     )
     def _embed_with_retry(self, texts: List[str]) -> List[List[float]]:
-        """Embed texts with automatic retry on transient failures.
-
-        Args:
-            texts: List of strings to embed.
-
-        Returns:
-            List of embedding vectors.
-        """
+        """일시적 장애 시 자동 재시도하며 임베딩한다."""
         return self._call_embedding_api(texts)
 
-    # -- LangChain Embeddings interface --------------------------------------
-
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a list of document texts.
+        """문서 텍스트 목록을 임베딩한다.
 
-        Texts are processed in batches of ``self.batch_size`` to avoid
-        overwhelming the API. Each batch is retried independently on
-        transient failures.
+        ``self.batch_size`` 단위로 나누어 API를 호출하며,
+        각 배치는 독립적으로 재시도된다.
 
-        Args:
-            texts: List of document strings to embed.
+        매개변수:
+            texts: 임베딩할 문서 문자열 목록.
 
-        Returns:
-            List of embedding vectors, one per input text.
+        반환:
+            입력 텍스트별 임베딩 벡터 목록.
 
-        Raises:
-            APIError: If the embedding API fails after retries.
+        예외:
+            APIError: 재시도 후에도 API 호출 실패 시.
         """
         if not texts:
             return []
@@ -215,16 +181,16 @@ class ZaiEmbeddings(Embeddings):
         return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
-        """Embed a single query string.
+        """단일 쿼리 문자열을 임베딩한다.
 
-        Args:
-            text: Query text to embed.
+        매개변수:
+            text: 임베딩할 쿼리 텍스트.
 
-        Returns:
-            Single embedding vector.
+        반환:
+            단일 임베딩 벡터.
 
-        Raises:
-            APIError: If the embedding API fails after retries.
+        예외:
+            APIError: 재시도 후에도 API 호출 실패 시.
         """
         logger.debug("Embedding query: %s", text[:100])
         embeddings = self._embed_with_retry([text])

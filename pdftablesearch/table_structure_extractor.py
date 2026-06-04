@@ -1,15 +1,15 @@
-"""Table Structure Extractor — HTML table → hierarchical path extraction.
+"""표 구조 추출기 — HTML 표 → 계층 경로 추출.
 
-Converts nested/key-value HTML tables into structured semantic chunks:
+중첩/키-값 HTML 표를 구조화된 의미 청크로 변환한다:
   path: "간이투자설명서 > 모집기간"
   value: "2022년 4월 25일 ~ 2022년 4월 27일"
 
-Supports:
-  - Key-value tables (interleaved <p> tags in single-cell outer table)
-  - Grid tables (standard row×column)
-  - Nested/inner tables (recursive hierarchy)
-  - Multi-page merged tables
-  - PyMuPDF cell-level extraction for nested tables (fallback for merged cells)
+지원:
+  - 키-값 표 (단일 셀 외부 표 내 교차 <p> 태그)
+  - 그리드 표 (표준 행×열)
+  - 중첩/내부 표 (재귀 계층)
+  - 다중 페이지 병합 표
+  - PyMuPDF 셀 단위 추출 (병합 셀 폴백)
 """
 
 from __future__ import annotations

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
-from pdftablesearch.embeddings import ZaiEmbeddings
+from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
 from pdftablesearch.exceptions import VectorIndexError, VectorSearchError
 from pdftablesearch.utils import get_logger
 from pdftablesearch.vectorstores.weaviate_client import (
@@ -44,8 +44,8 @@ class WeaviateTableVectorStore:
         persist_dir: Optional[str] = None,
         collection_name: Optional[str] = None,
     ) -> None:
-        self.embeddings = embeddings or ZaiEmbeddings()
-        self.persist_dir = persist_dir or os.getenv("CHROMA_PERSIST_DIR", "./.chroma")
+        self.embeddings = embeddings or SentenceTransformerEmbeddings()
+        self.persist_dir = persist_dir or os.getenv("WEAVIATE_DATA_DIR", "/tmp/weaviate-data")
         self.collection_name = collection_name or os.getenv(
             "CHROMA_COLLECTION_NAME",
             "pdf_tables",
