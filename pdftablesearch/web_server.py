@@ -38,9 +38,11 @@ from pdftablesearch.auth import (
     authenticate_login,
     clear_auth_cookies,
     create_auth_session,
+    create_pre_auth_session,
     end_auth_session,
     set_auth_cookies,
     validate_auth_request,
+    verify_otp,
 )
 from pdftablesearch.config import get_settings
 from pdftablesearch.llm_client import ZaiLLMClient
@@ -210,6 +212,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class OtpRequest(BaseModel):
+    pre_auth_token: str
+    otp_code: str
+
+
 @app.get("/api/auth/config")
 async def auth_config_endpoint() -> JSONResponse:
     return JSONResponse(content=auth_config())
@@ -236,6 +243,21 @@ async def auth_me(request: Request) -> JSONResponse:
 @app.post("/api/auth/ldap")
 async def auth_ldap(body: LoginRequest) -> JSONResponse:
     user = authenticate_login(body.username.strip(), body.password)
+    pre_auth = create_pre_auth_session(user)
+    return JSONResponse(
+        content={
+            "authenticated": False,
+            "requires_otp": True,
+            "pre_auth_token": pre_auth.token,
+            "user": user.to_dict(),
+            **auth_config(),
+        }
+    )
+
+
+@app.post("/api/auth/otp")
+async def auth_otp(body: OtpRequest) -> JSONResponse:
+    user = verify_otp(body.pre_auth_token, body.otp_code)
     session = create_auth_session(user)
     response = JSONResponse(
         content={

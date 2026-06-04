@@ -81,9 +81,10 @@ PDF에서 추출된 이미지(차트, 도표 등)를 주변 텍스트 컨텍스�
 - **검색 기록 유지**: 세션을 전환해도 각 세션의 검색 결과와 대화 기록이 localStorage에 보존
 - **PDF 선택 필터링**: 여러 PDF 중 원하는 문서만 선택하여 검색 범위 제한
 
-### 6. 로그인 및 idle timeout
+### 6. 로그인, OTP 및 idle timeout
 
-- **LDAP-compatible 로그인 API**: UI가 `/api/auth/ldap`로 로그인하고 API가 httpOnly 세션 쿠키를 발급
+- **LDAP-compatible 로그인 API**: UI가 `/api/auth/ldap`로 ID/PW를 검증하고 짧은 `pre_auth_token`을 발급
+- **OTP 인증**: UI가 `/api/auth/otp`로 OTP를 검증한 뒤에만 API가 httpOnly 세션 쿠키를 발급
 - **로컬 개발 계정**: LDAP 서버가 없으면 `admin/admin`, `123456/1234` dev user로 로그인
 - **10분 idle logout**: 브라우저 입력이 없으면 경고 후 `/api/auth/logout`을 호출하고 로그인 화면으로 복귀
 - **서버 강제 idle timeout**: FastAPI middleware가 API 요청마다 마지막 활동 시간을 검사해 10분 초과 세션을 차단
@@ -305,6 +306,8 @@ AUTH_ENABLED=true
 AUTH_IDLE_TIMEOUT_SECONDS=600
 AUTH_WARN_BEFORE_SECONDS=60
 AUTH_SESSION_TTL_SECONDS=3600
+AUTH_PRE_AUTH_TTL_SECONDS=300
+AUTH_OTP_CODE=123456
 AUTH_DEV_USERS=123456:1234:Developer User:user,admin:admin:Administrator:admin
 ```
 
@@ -318,7 +321,9 @@ LDAP_BIND_PASSWORD=secret
 LDAP_USER_FILTER=(uid={username})
 ```
 
-로그인 성공 시 API는 `pdf_portal_auth` httpOnly 쿠키와 `pdf_portal_auth_presence` marker 쿠키를 설정합니다. `/api/auth/config`가 idle timeout 값을 UI로 내려주고, React idle timer와 FastAPI middleware가 같은 600초 설정을 사용합니다. 로그인 후 화면 하단에는 남은 세션 시간이 `m:ss` 형식으로 표시되고, 마지막 60초에는 경고 모달에서 세션을 연장할 수 있습니다. 시간을 바꾸려면 `.env`의 `AUTH_IDLE_TIMEOUT_SECONDS`, `AUTH_WARN_BEFORE_SECONDS`, `AUTH_SESSION_TTL_SECONDS` 값을 조정합니다.
+로그인 흐름은 `ID/PW 입력 -> OTP 입력 -> 이용 안내 동의 -> 앱 진입` 순서입니다. `/api/auth/ldap`는 ID/PW만 검증하고 `AUTH_PRE_AUTH_TTL_SECONDS` 동안 유효한 임시 토큰을 반환합니다. `/api/auth/otp`가 `AUTH_OTP_CODE`와 임시 토큰을 검증한 뒤 `pdf_portal_auth` httpOnly 쿠키와 `pdf_portal_auth_presence` marker 쿠키를 설정합니다. 로컬 개발 기본 OTP는 `123456`입니다.
+
+`/api/auth/config`가 idle timeout 값을 UI로 내려주고, React idle timer와 FastAPI middleware가 같은 600초 설정을 사용합니다. 로그인 후 화면 하단에는 남은 세션 시간이 `m:ss` 형식으로 표시되고, 마지막 60초에는 경고 모달에서 세션을 연장할 수 있습니다. 시간을 바꾸려면 `.env`의 `AUTH_PRE_AUTH_TTL_SECONDS`, `AUTH_IDLE_TIMEOUT_SECONDS`, `AUTH_WARN_BEFORE_SECONDS`, `AUTH_SESSION_TTL_SECONDS` 값을 조정합니다.
 
 로그인 직후에는 PDF 처리 데이터 이용 안내 동의문이 표시됩니다. 동의문은 PDF 내용 추출, 표 CSV 다운로드, 번역 보조, 개인정보/민감정보 마스킹, 업로드 PDF 원본 7일 후 삭제 정책을 안내하며, 체크박스 동의 후에만 앱 화면으로 진입합니다.
 

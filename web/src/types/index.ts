@@ -108,11 +108,19 @@ export interface AuthConfig {
   idle_timeout_seconds: number;
   warn_before_seconds: number;
   session_ttl_seconds: number;
+  pre_auth_ttl_seconds: number;
 }
 
 export interface AuthStatus extends AuthConfig {
   authenticated: boolean;
   user: AuthUser | null;
+}
+
+export interface PreAuthStatus extends AuthConfig {
+  authenticated: false;
+  requires_otp: true;
+  pre_auth_token: string;
+  user: AuthUser;
 }
 
 export interface TableQAItem {

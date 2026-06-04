@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     auth_session_ttl_seconds: int = 3600
     auth_cookie_secure: bool = False
     auth_dev_users: str = "123456:1234:Developer User:user,admin:admin:Administrator:admin"
+    auth_pre_auth_ttl_seconds: int = 300
+    auth_otp_code: str = "123456"
 
     ldap_server: Optional[str] = None
     ldap_base_dn: str = "DC=hc,DC=com"

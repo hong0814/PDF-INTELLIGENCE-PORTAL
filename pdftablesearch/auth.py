@@ -43,7 +43,16 @@ class AuthSession:
     last_activity: float
 
 
+@dataclass
+class PreAuthSession:
+    token: str
+    user: AuthUser
+    issued_at: float
+    expires_at: float
+
+
 _auth_sessions: Dict[str, AuthSession] = {}
+_pre_auth_sessions: Dict[str, PreAuthSession] = {}
 
 
 def auth_config() -> dict[str, Any]:
@@ -53,7 +62,41 @@ def auth_config() -> dict[str, Any]:
         "idle_timeout_seconds": settings.auth_idle_timeout_seconds,
         "warn_before_seconds": settings.auth_warn_before_seconds,
         "session_ttl_seconds": settings.auth_session_ttl_seconds,
+        "pre_auth_ttl_seconds": settings.auth_pre_auth_ttl_seconds,
     }
+
+
+def create_pre_auth_session(user: AuthUser) -> PreAuthSession:
+    settings = get_settings()
+    now = time.time()
+    token = secrets.token_urlsafe(32)
+    session = PreAuthSession(
+        token=token,
+        user=user,
+        issued_at=now,
+        expires_at=now + settings.auth_pre_auth_ttl_seconds,
+    )
+    _pre_auth_sessions[token] = session
+    return session
+
+
+def verify_otp(pre_auth_token: str, otp_code: str) -> AuthUser:
+    settings = get_settings()
+    session = _pre_auth_sessions.get(pre_auth_token)
+    now = time.time()
+    if session is None or session.expires_at <= now:
+        if session is not None:
+            _pre_auth_sessions.pop(pre_auth_token, None)
+        raise HTTPException(status_code=401, detail="OTP session expired")
+
+    expected = settings.auth_otp_code.strip()
+    submitted = otp_code.strip()
+    if not expected or not secrets.compare_digest(expected, submitted):
+        _pre_auth_sessions.pop(pre_auth_token, None)
+        raise HTTPException(status_code=401, detail="Invalid OTP code")
+
+    _pre_auth_sessions.pop(pre_auth_token, None)
+    return session.user
 
 
 def create_auth_session(user: AuthUser) -> AuthSession:

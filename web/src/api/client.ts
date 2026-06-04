@@ -8,6 +8,7 @@ import type {
   UnifiedSource,
   AuthConfig,
   AuthStatus,
+  PreAuthStatus,
 } from '../types';
 
 export const BASE = '/api';
@@ -33,11 +34,21 @@ export async function getCurrentAuth(): Promise<AuthStatus> {
   return res.json();
 }
 
-export async function loginWithLdap(username: string, password: string): Promise<AuthStatus> {
+export async function loginWithLdap(username: string, password: string): Promise<PreAuthStatus> {
   const res = await apiFetch(`${BASE}/auth/ldap`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function verifyOtp(preAuthToken: string, otpCode: string): Promise<AuthStatus> {
+  const res = await apiFetch(`${BASE}/auth/otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pre_auth_token: preAuthToken, otp_code: otpCode }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
