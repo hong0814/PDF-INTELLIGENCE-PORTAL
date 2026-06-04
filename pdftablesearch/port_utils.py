@@ -240,15 +240,34 @@ def stop_service(name: str) -> None:
             print(f"{'weaviate_py':<14} wrapper stopped {', '.join(map(str, killed))}")
 
 
-def _timestamped_log_dir() -> Path:
-    log_dir = LOG_ROOT / f"qa_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir
+def daily_log_path(now: datetime | None = None) -> Path:
+    """Return the shared daily application log path."""
+    current = now or datetime.now()
+    LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    return LOG_ROOT / f"app_{current.strftime('%Y%m%d')}.log"
 
 
-def _spawn(name: str, command: list[str], log_dir: Path, cwd: Path = ROOT) -> subprocess.Popen:
-    log_path = log_dir / f"{name}.log"
+def _resolve_log_path(log_target: Path | None, name: str) -> Path:
+    if log_target is None:
+        return daily_log_path()
+    if log_target.suffix == ".log":
+        log_target.parent.mkdir(parents=True, exist_ok=True)
+        return log_target
+    log_target.mkdir(parents=True, exist_ok=True)
+    return log_target / f"{name}.log"
+
+
+def _spawn(
+    name: str,
+    command: list[str],
+    log_target: Path | None = None,
+    cwd: Path = ROOT,
+) -> subprocess.Popen:
+    log_path = _resolve_log_path(log_target, name)
     log_file = log_path.open("ab")
+    start_line = f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] starting {name}: {' '.join(command)}\n"
+    log_file.write(start_line.encode())
+    log_file.flush()
     process = subprocess.Popen(
         command,
         cwd=str(cwd),
@@ -260,15 +279,15 @@ def _spawn(name: str, command: list[str], log_dir: Path, cwd: Path = ROOT) -> su
     return process
 
 
-def _spawn_service(spec: ServiceSpec, log_dir: Path) -> subprocess.Popen:
+def _spawn_service(spec: ServiceSpec, log_target: Path | None = None) -> subprocess.Popen:
     print(f"{spec.name:<14} command={' '.join(spec.command)}")
-    return _spawn(spec.name, spec.command, log_dir, cwd=spec.cwd)
+    return _spawn(spec.name, spec.command, log_target, cwd=spec.cwd)
 
 
 def run_service(name: str, log_dir: Path | None = None) -> subprocess.Popen:
     """Start one configured local service in the background."""
     spec = _service_by_name(name)
-    return _spawn_service(spec, log_dir or _timestamped_log_dir())
+    return _spawn_service(spec, log_dir)
 
 
 def run_weaviate(log_dir: Path | None = None) -> subprocess.Popen:
@@ -294,11 +313,11 @@ def run_ui(log_dir: Path | None = None) -> subprocess.Popen:
 def run_all() -> None:
     """Stop existing local services, then start all development services."""
     killports()
-    log_dir = _timestamped_log_dir()
-    print(f"logs: {log_dir}")
+    log_path = daily_log_path()
+    print(f"logs: {log_path}")
     processes: list[tuple[ServiceSpec, subprocess.Popen]] = []
     for spec in service_specs():
-        processes.append((spec, _spawn_service(spec, log_dir)))
+        processes.append((spec, _spawn_service(spec, log_path)))
 
     failures = [spec.name for spec, process in processes if not _wait_for_service(spec, process)]
     if failures:

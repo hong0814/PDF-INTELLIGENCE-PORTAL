@@ -17,6 +17,10 @@ import type {
 export const BASE = '/api';
 export const AUTH_EXPIRED_EVENT = 'pdf-auth-expired';
 
+export function logoutUrl(): string {
+  return `${BASE}/auth/logout`;
+}
+
 interface ApiFetchOptions extends RequestInit {
   sessionId?: string;
 }
@@ -92,7 +96,7 @@ export async function getCurrentUser(): Promise<AuthUser> {
 }
 
 export async function logout(): Promise<void> {
-  await apiFetch(`${BASE}/auth/logout`, { method: 'POST' });
+  await apiFetch(logoutUrl(), { method: 'POST' });
 }
 
 export async function createSession(name: string): Promise<{ session_id: string; name: string }> {

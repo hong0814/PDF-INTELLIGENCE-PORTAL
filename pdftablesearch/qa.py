@@ -10,27 +10,23 @@ from pathlib import Path
 from pdftablesearch import port_utils
 
 
-def _latest_log_dir() -> Path | None:
+def _latest_log_file() -> Path | None:
     log_root = port_utils.LOG_ROOT
     if not log_root.exists():
         return None
-    candidates = sorted(
-        [path for path in log_root.iterdir() if path.is_dir() and path.name.startswith("qa_")]
-    )
+    candidates = sorted(log_root.glob("app_*.log"))
     return candidates[-1] if candidates else None
 
 
 def _print_latest_logs(lines: int = 40) -> None:
-    latest = _latest_log_dir()
+    latest = _latest_log_file()
     if latest is None:
-        print("No QA log directory found.")
+        print("No daily app log file found.")
         return
     print(f"logs: {latest}")
-    for path in sorted(latest.glob("*.log")):
-        print(f"\n==> {path.name} <==")
-        content = path.read_text(errors="replace").splitlines()
-        for line in content[-lines:]:
-            print(line)
+    content = latest.read_text(errors="replace").splitlines()
+    for line in content[-lines:]:
+        print(line)
 
 
 def _run_tests(include_weaviate: bool = False) -> int:

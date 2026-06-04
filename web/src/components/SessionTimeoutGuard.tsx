@@ -40,14 +40,8 @@ export default function SessionTimeoutGuard({ config, onExpired }: SessionTimeou
   const expire = useCallback(async () => {
     if (expiringRef.current) return;
     expiringRef.current = true;
-    try {
-      await api.logout();
-    } catch {
-      // The local transition to the login screen is the important part here.
-    } finally {
-      onExpired();
-    }
-  }, [onExpired]);
+    window.location.replace(api.logoutUrl());
+  }, []);
 
   const touch = useCallback(async (force = false) => {
     if (expiringRef.current) return;

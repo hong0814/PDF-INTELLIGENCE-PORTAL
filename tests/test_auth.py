@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pdftablesearch.auth import LDAPUser, decode_pre_auth_jwt
@@ -285,6 +286,21 @@ def test_logout_deletes_redis_session_and_both_cookies(monkeypatch) -> None:
     response = client.post("/api/auth/logout")
 
     assert response.status_code == 200
+    assert token not in sessions
+    assert not client.cookies.get(get_settings().auth_cookie_name)
+    assert not client.cookies.get("auth_presence")
+
+
+@pytest.mark.parametrize("path", ["/auth/logout", "/api/auth/logout"])
+def test_get_logout_redirect_deletes_redis_session_and_both_cookies(monkeypatch, path: str) -> None:
+    client = TestClient(app)
+    sessions = _patch_sessions(monkeypatch)
+    token = _complete_login(client, monkeypatch, sessions)
+
+    response = client.get(path, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"{get_settings().auth_ui_url}/login"
     assert token not in sessions
     assert not client.cookies.get(get_settings().auth_cookie_name)
     assert not client.cookies.get("auth_presence")

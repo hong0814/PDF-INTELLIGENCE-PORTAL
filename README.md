@@ -257,9 +257,10 @@ pdftablesearch/
 | `GET` | `/auth/verify` | Bearer token Redis 세션 검증 |
 | `DELETE` | `/auth/session` | Bearer token Redis 세션 삭제 |
 | `POST` | `/auth/logout` | Redis 세션 및 인증 쿠키 삭제 |
+| `GET` | `/auth/logout` | Redis 세션 및 인증 쿠키 삭제 후 로그인 페이지로 302 redirect |
 | `POST` | `/auth/touch` | 로그인 상태 확인 및 idle timer 유지 |
 
-브라우저/UI 경유 호출은 동일한 기능을 `/api/auth/config`, `/api/auth/ldap`, `/api/auth/otp`, `/api/auth/logout`, `/api/auth/touch`로 사용할 수 있습니다. `/api/auth/login`은 이전 프론트 호환용 wrapper입니다.
+브라우저/UI 경유 호출은 동일한 기능을 `/api/auth/config`, `/api/auth/ldap`, `/api/auth/otp`, `/api/auth/logout`, `/api/auth/touch`로 사용할 수 있습니다. idle timeout 만료 시 브라우저는 `GET /api/auth/logout`으로 이동해 쿠키 삭제와 로그인 페이지 redirect 흐름을 탑니다. `/api/auth/login`은 이전 프론트 호환용 wrapper입니다.
 
 ### 세션
 

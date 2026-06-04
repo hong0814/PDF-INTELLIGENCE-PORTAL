@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+from pdftablesearch.port_utils import daily_log_path
+
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
 WEB_DIST = WEB_DIR / "dist"
@@ -65,9 +67,7 @@ def _start_hybrid(port: int) -> None:
         print(f"Hybrid PDF server is already listening on http://localhost:{port}.")
         return
 
-    log_dir = ROOT / "logs"
-    log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / "hybrid.log"
+    log_path = daily_log_path()
     with log_path.open("ab") as log_file:
         subprocess.Popen(
             ["opendataloader-pdf-hybrid", "--port", str(port)],
