@@ -314,7 +314,39 @@ export const useAppStore = create<AppState>((set) => ({
     ),
 
   reset: () => {
-    localStorage.removeItem(SESSION_KEY);
-    window.location.reload();
+    fetch('/api/sessions', {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        set({
+          sessionId: data.session_id,
+          sessionName: data.name || '새 세션',
+          activeTab: 'main',
+          pdfs: [],
+          totalTables: 0,
+          totalPages: 0,
+          selectedPdfs: [],
+          lastSearchQuery: '',
+          results: [],
+          smartResult: null,
+          searchTime: 0,
+          isLoading: false,
+          error: null,
+          qaMessages: [],
+          documentChunksReady: false,
+          isUploading: false,
+          tableQAs: {},
+          highlightRegion: null,
+          unifiedResult: null,
+          unifiedFollowups: [],
+          isUnifiedSearchLoading: false,
+          isTranslating: false,
+          translationProgress: '',
+          translatedPages: {},
+        });
+      })
+      .catch(() => window.location.reload());
   },
 }));

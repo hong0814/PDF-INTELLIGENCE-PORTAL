@@ -404,7 +404,66 @@ def _build_tables_from_pymupdf(
 
         inner_ids = []
         for inner_idx in o.get("inner_table_indices", []):
-            inner_ids.append(f"fitz_p{inner_fitz[inner_idx]['page']}_{inner_fitz[inner_idx]['fi']}_inner")
+            inn = inner_fitz[inner_idx]
+            inner_id = f"fitz_p{inn['page']}_{inn['fi']}_inner"
+            inner_ids.append(inner_id)
+
+            inn_bbox_pdf = inn["pdf_bbox"]
+            # Find hybrid table whose bbox is contained within this inner table's PyMuPDF bbox
+            page_hybrid = hybrid_by_page.get(o["page"], [])
+            matched_hybrid = None
+            for ht in page_hybrid:
+                ht_bbox = ht.get("bounding_box", [])
+                if not ht_bbox or ht_bbox == [0, 0, 0, 0]:
+                    continue
+                # ht bbox must be mostly inside the inner fitz bbox
+                inn_y1, inn_y2 = inn_bbox_pdf[1], inn_bbox_pdf[3]
+                ht_y1, ht_y2 = ht_bbox[1], ht_bbox[3]
+                inn_x1, inn_x2 = inn_bbox_pdf[0], inn_bbox_pdf[2]
+                ht_x1, ht_x2 = ht_bbox[0], ht_bbox[2]
+                horz_overlap = max(0, min(inn_x2, ht_x2) - max(inn_x1, ht_x1))
+                vert_overlap = max(0, min(inn_y2, ht_y2) - max(inn_y1, ht_y1))
+                inn_area = (inn_x2 - inn_x1) * (inn_y2 - inn_y1)
+                ht_area = (ht_x2 - ht_x1) * (ht_y2 - ht_y1)
+                if inn_area > 0 and ht_area > 0:
+                    overlap_ratio = (horz_overlap * vert_overlap) / min(inn_area, ht_area)
+                    if overlap_ratio > 0.5:
+                        matched_hybrid = ht
+                        break
+
+            if matched_hybrid:
+                inn_html = matched_hybrid.get("table_html", "")
+                inn_final_bbox = matched_hybrid.get("bounding_box", inn_bbox_pdf)
+                inn_title = matched_hybrid.get("table_title", None)
+                inn_source = "hybrid"
+            else:
+                inn_data = inn.get("data", [])
+                inn_html = ""
+                if inn_data:
+                    inn_html_parts = ["<table>"]
+                    for ri, row in enumerate(inn_data):
+                        tag = "th" if ri == 0 else "td"
+                        inn_html_parts.append("<tr>" + "".join(f"<{tag}>{_escape_html(str(c or ''))}</{tag}>" for c in row) + "</tr>")
+                    inn_html_parts.append("</table>")
+                    inn_html = "".join(inn_html_parts)
+                inn_final_bbox = [round(v, 2) for v in inn_bbox_pdf]
+                inn_title = None
+                inn_source = "pymupdf"
+
+            results.append({
+                "table_id": inner_id,
+                "hybrid_table_id": matched_hybrid.get("table_id", "") if matched_hybrid else "",
+                "page_number": inn["page"],
+                "bounding_box": inn_final_bbox,
+                "table_html": inn_html,
+                "table_title": inn_title,
+                "document_name": doc_name,
+                "has_inner_tables": False,
+                "is_inner": True,
+                "outer_table_id": f"fitz_p{o['page']}_{o['fi']}",
+                "inner_table_ids": [],
+                "_source": inn_source,
+            })
 
         final_bbox = [round(v, 2) for v in o["pdf_bbox"]]
 

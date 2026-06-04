@@ -271,7 +271,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
 
   const currentPageTables = overlays.filter(o => o.page === currentPage).filter(o => {
     if (tableFilter === 'outer') return !o.is_inner;
-    if (tableFilter === 'inner') return o.is_inner || !o.has_inner_tables;
+    if (tableFilter === 'inner') return o.is_inner;
     return true;
   });
 

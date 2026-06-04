@@ -15,13 +15,12 @@ export default function LoginView({ error, isSubmitting, onSubmit }: LoginViewPr
       <div className="w-full max-w-[400px] rounded-2xl border border-[#303741] bg-[#212831] px-8 py-9 shadow-[0_4px_24px_rgba(0,0,0,0.35)]">
         <div className="flex flex-col items-center gap-3">
           <img
-            alt="분석 Agent 로고"
+            alt="PDF Intelligence Portal"
             className="h-12 w-auto object-contain"
-            src="/logo.png"
+            src="/logo.svg"
           />
           <div className="space-y-1 text-center">
-            <h1 className="text-[1.2rem] font-semibold text-[#f0f6fc]">분석 Agent</h1>
-            <p className="text-sm text-[#9da7b3]">PDF Intelligence Portal</p>
+            <h1 className="text-[1.2rem] font-semibold text-[#f0f6fc]">PDF Intelligence Portal</h1>
           </div>
         </div>
 
