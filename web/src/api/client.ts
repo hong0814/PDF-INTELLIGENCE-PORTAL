@@ -9,9 +9,11 @@ import type {
   PdfsResponse,
   UnifiedSearchResponse,
   UnifiedSource,
+  AuthConfig,
 } from '../types';
 
 export const BASE = '/api';
+export const AUTH_EXPIRED_EVENT = 'pdf-auth-expired';
 
 interface ApiFetchOptions extends RequestInit {
   sessionId?: string;
@@ -42,6 +44,9 @@ async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Res
     ...init,
     headers: withSessionHeaders(sessionId, headers),
   });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
   if (!res.ok) throw new Error(await readError(res));
   return res;
 }
@@ -49,6 +54,14 @@ async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Res
 async function apiJson<T>(url: string, options: ApiFetchOptions = {}): Promise<T> {
   const res = await apiFetch(url, options);
   return res.json() as Promise<T>;
+}
+
+export async function getAuthConfig(): Promise<AuthConfig> {
+  return apiJson<AuthConfig>(`${BASE}/auth/config`);
+}
+
+export async function touchAuth(): Promise<void> {
+  await apiFetch(`${BASE}/auth/touch`, { method: 'POST' });
 }
 
 export async function login(body: LoginRequest): Promise<AuthUser> {

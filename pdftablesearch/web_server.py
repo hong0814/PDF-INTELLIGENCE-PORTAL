@@ -33,11 +33,14 @@ from starlette.responses import StreamingResponse
 from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
 from pdftablesearch.auth import (
     LDAPUser,
+    auth_config_dict,
     clear_auth_cookie,
+    end_auth_session,
     get_current_user,
     issue_auth_token,
     ldap_client_from_settings,
     set_auth_cookie,
+    touch_auth_session,
     warn_if_insecure_auth_secret,
 )
 from pdftablesearch.config import get_settings
@@ -410,21 +413,36 @@ class ConfirmGroupRequest(BaseModel):
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginRequest, response: Response) -> JSONResponse:
+async def login(body: LoginRequest) -> JSONResponse:
     client = ldap_client_from_settings()
     user = client.authenticate(body.username, body.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     token, ttl_seconds = issue_auth_token(user)
+    response = JSONResponse(content={"user": user.model_dump()})
     set_auth_cookie(response, token, ttl_seconds)
-    return JSONResponse(content={"user": user.model_dump()})
+    return response
 
 
 @app.post("/api/auth/logout")
-async def logout(response: Response) -> JSONResponse:
+async def logout(request: Request, response: Response) -> JSONResponse:
+    end_auth_session(request)
     clear_auth_cookie(response)
     return JSONResponse(content={"ok": True})
+
+
+@app.get("/api/auth/config")
+async def auth_config() -> JSONResponse:
+    return JSONResponse(content=auth_config_dict())
+
+
+@app.post("/api/auth/touch")
+async def auth_touch(request: Request, response: Response) -> JSONResponse:
+    if not touch_auth_session(request):
+        clear_auth_cookie(response)
+        return JSONResponse(status_code=401, content={"detail": "Session expired"})
+    return JSONResponse(content={"ok": True, **auth_config_dict()})
 
 
 @app.get("/api/auth/me")
@@ -680,6 +698,8 @@ async def get_document_tables(
             mt["table_html"] = mask_pii_in_html(mt["table_html"])
         if mt.get("table_title"):
             mt["table_title"] = mask_pii_text(mt["table_title"])
+        if mt.get("sub_title"):
+            mt["sub_title"] = mask_pii_text(mt["sub_title"])
         if mt.get("merged_table_html"):
             mt["merged_table_html"] = mask_pii_in_html(mt["merged_table_html"])
         masked_tables.append(mt)
@@ -1092,14 +1112,33 @@ async def upload_pdfs(
         total_tables += table_count
         all_docs.extend(documents)
 
+        subtitle_map: dict[str, str] = {}
+        for ft in final_tables:
+            sub = ft.get("sub_title")
+            if sub:
+                subtitle_map[ft.get("table_id")] = sub
+                htid = ft.get("hybrid_table_id")
+                if htid:
+                    subtitle_map[htid] = sub
+
+        for doc in all_docs:
+            tid = doc.metadata.get("table_id", "")
+            sub = subtitle_map.get(tid)
+            if sub and sub not in doc.page_content:
+                doc.page_content = sub + "\n" + doc.page_content
+                doc.metadata["sub_title"] = sub
+
         pymupdf_only_count = 0
         for ft in final_tables:
             if ft.get("_source") == "pymupdf":
                 from langchain_core.documents import Document as LCDocument
                 ft_title = ft.get("table_title") or ""
+                ft_sub = ft.get("sub_title") or ""
                 ft_html = ft.get("table_html") or ""
                 content_parts = []
-                if ft_title:
+                if ft_sub:
+                    content_parts.append(ft_sub)
+                if ft_title and ft_title != ft_sub:
                     content_parts.append(ft_title)
                 if ft_html:
                     content_parts.append(ft_html)
@@ -1110,6 +1149,7 @@ async def upload_pdfs(
                     "table_id": ft.get("table_id", ""),
                     "document_name": ft.get("document_name", filename),
                     "table_html": ft_html,
+                    "sub_title": ft_sub,
                 }
                 if ft_title:
                     doc_meta["table_title"] = ft_title
@@ -2101,18 +2141,27 @@ async def unified_search_endpoint(
                                 resolved_pdf_name = pn
                                 break
 
+                    sub_title = meta.get("sub_title") or ""
                     merged_html = session_table.get("merged_table_html") if session_table else None
+
                     if merged_html:
                         try:
                             from pdftablesearch.table_structure_extractor import extract_table_structure as _ets
                             merged_struct = _ets(html=merged_html, table_id=table_id, table_title=title)
-                            display_text = mask_pii_text(merged_struct.to_full_text())
+                            raw_text = merged_struct.to_full_text()
                         except Exception:
-                            display_text = mask_pii_in_html(merged_html[:1500])
+                            raw_text = merged_html[:1500]
                     else:
-                        display_text = mask_pii_text(chunk_text)
+                        raw_text = chunk_text
 
-                    context_parts.append(f"[표출처{table_source_idx}] 제목: {title}\n{display_text}")
+                    if sub_title:
+                        raw_text = raw_text.replace(sub_title, "", 1).strip()
+                    display_text = mask_pii_text(raw_text)
+
+                    source_label = f"[표출처{table_source_idx}] 제목: {title}"
+                    if sub_title and sub_title != title:
+                        source_label += f"\n부제: {sub_title}"
+                    context_parts.append(f"{source_label}\n{display_text}")
 
                     bbox_val = meta.get("bounding_box", [0,0,0,0])
                     if bbox_val and all(v == 0 for v in bbox_val):

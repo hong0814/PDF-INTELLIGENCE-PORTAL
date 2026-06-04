@@ -1,6 +1,6 @@
 # PDF Intelligence Portal — 시스템 아키텍처
 
-> 최종 수정: 2026-06-02
+> 최종 수정: 2026-06-04
 
 ---
 
@@ -480,20 +480,37 @@ PyMuPDF find_tables()  +  Hybrid (opendataloader-pdf)
     │    (텍스트 유사도 + y좌표 오버랩) │
     │ 2. 매칭 성공 → hybrid HTML 사용  │
     │    bbox는 hybrid 것 우선         │
-    │ 3. 매칭 실패 → PyMuPDF HTML 폴백 │
-    │ 4. Hybrid 전용 표 → fallback 추가│
-    │ 5. 다중페이지 표 체인 감지        │
+    │ 3. inner table도 hybrid bbox 매칭│
+    │    (50% 이상 중첩 시 hybrid 우선) │
+    │ 4. 매칭 실패 → PyMuPDF HTML 폴백 │
+    │ 5. Hybrid 전용 표 → fallback 추가│
+    │ 6. 다중페이지 표 체인 감지        │
     └─────────────────────────────────┘
 ```
 
-### 7.5 PII 마스킹 적용 범위
+### 7.5 로컬 임베딩 모델 경로 (폐쇄망 지원)
+
+```
+개발 환경:
+  SentenceTransformer('BAAI/bge-m3') → ~/.cache/huggingface/hub/ 자동 다운로드
+
+폐쇄망:
+  .env: LOCAL_EMBEDDING_MODEL_PATH=/opt/models/bge-m3-local
+  SentenceTransformer._-init-  → config에서 경로 자동 읽기
+  → 로컬 폴더에서 직접 모델 로드 (HF_HUB_OFFLINE 불필요)
+
+config.py: local_embedding_model_path: str = ""
+local_embeddings.py: if 설정된 경로 존재 → SentenceTransformer(경로) else → model_name
+```
+
+### 7.6 table_id 이중 매칭
 
 - **RAG 검색 결과**: 표 HTML, 텍스트 청크 모두 마스킹
 - **문서 보기**: 표 HTML 렌더링 시 마스킹
 - **출처 팝업**: PDF 하이라이트 텍스트 마스킹
 - **Q&A**: 사용자 질문 히스토리 정제
 
-### 7.6 인증 플로우
+### 7.7 인증 플로우
 
 ```
 1. POST /api/auth/login {user_id, password}
@@ -507,7 +524,7 @@ PyMuPDF find_tables()  +  Hybrid (opendataloader-pdf)
    → Cookie 삭제
 ```
 
-### 7.7 세션 관리
+### 7.8 세션 관리
 
 - **저장소**: 인메모리 `_sessions` 딕셔너리 (서버 재시작 시 손실)
 - **격리**: 각 세션 = 독립 임시 디렉토리 (업로드, Weaviate, BM25)

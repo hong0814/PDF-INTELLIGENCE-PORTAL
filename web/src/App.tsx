@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { TableGroupSuggestion } from './types';
+import type { TableGroupSuggestion, AuthConfig } from './types';
 import * as api from './api/client';
 import { useAppStore } from './store/useAppStore';
 import Sidebar from './components/Sidebar';
@@ -12,6 +12,10 @@ import UnifiedSearchView from './components/UnifiedSearchView';
 import TranslationView from './components/TranslationView';
 import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
 import LoginView from './components/LoginView';
+import SessionTimeoutGuard from './components/SessionTimeoutGuard';
+import AgreementOverlay from './components/AgreementOverlay';
+
+const AGREEMENT_KEY = 'pdf_portal_agreement_accepted';
 
 export default function App() {
   const user = useAppStore((s) => s.user);
@@ -35,6 +39,8 @@ export default function App() {
   const prevSessionIdRef = useRef(sessionId);
 
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [showAgreement, setShowAgreement] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginSubmitting, setLoginSubmitting] = useState(false);
 
@@ -45,6 +51,12 @@ export default function App() {
       if (cancelled) return;
       setUser(nextUser);
       setLoginError(null);
+      api.getAuthConfig().then((cfg) => {
+        if (!cancelled) setAuthConfig(cfg);
+      }).catch(() => {});
+      if (sessionStorage.getItem(AGREEMENT_KEY) !== '1') {
+        setShowAgreement(true);
+      }
     }).catch(() => {
       if (cancelled) return;
       clearAuth();
@@ -61,6 +73,13 @@ export default function App() {
     try {
       const nextUser = await api.login({ username, password });
       setUser(nextUser);
+      try {
+        const cfg = await api.getAuthConfig();
+        setAuthConfig(cfg);
+      } catch { }
+      if (sessionStorage.getItem(AGREEMENT_KEY) !== '1') {
+        setShowAgreement(true);
+      }
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '로그인에 실패했습니다.');
     } finally {
@@ -74,6 +93,8 @@ export default function App() {
       await api.logout();
     } finally {
       clearAuth();
+      setAuthConfig(null);
+      sessionStorage.removeItem(AGREEMENT_KEY);
     }
   }, [clearAuth]);
 
@@ -257,6 +278,7 @@ export default function App() {
         onUploadComplete={handleUploadComplete}
         onDeletePdf={handleDeletePdf}
         onReset={reset}
+        onTableGroupSuggestions={setTableGroupSuggestions}
       />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -290,6 +312,18 @@ export default function App() {
         <TableGroupSuggestionPopup
           suggestions={tableGroupSuggestions}
           onComplete={() => { setTableGroupSuggestions([]); useAppStore.getState().bumpOverlayVersion(); }}
+        />
+      )}
+      {user && authConfig?.enabled && !showAgreement && (
+        <SessionTimeoutGuard config={authConfig} onExpired={handleLogout} />
+      )}
+      {user && showAgreement && (
+        <AgreementOverlay
+          onConfirm={() => {
+            sessionStorage.setItem(AGREEMENT_KEY, '1');
+            setShowAgreement(false);
+          }}
+          onCancel={() => { void handleLogout(); }}
         />
       )}
     </div>

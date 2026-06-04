@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     auth_cookie_name: str = "auth_token"
     auth_cookie_secure: bool = False
     auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    auth_idle_timeout_seconds: int = 600
+    auth_warn_before_seconds: int = 60
+    auth_session_ttl_seconds: int = 3600
 
     # -- Weaviate ------------------------------------------------------------
 

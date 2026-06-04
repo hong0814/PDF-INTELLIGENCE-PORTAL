@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import type { PdfInfo, SessionInfo } from '../types';
+import type { PdfInfo, SessionInfo, TableGroupSuggestion } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import * as api from '../api/client';
 
@@ -10,9 +10,10 @@ interface SidebarProps {
   onUploadComplete: (sessionId: string, pdfs: Record<string, { table_count: number; page_count: number }>, totalTables: number, totalPages: number) => void;
   onDeletePdf: (name: string) => void;
   onReset: () => void;
+  onTableGroupSuggestions?: (suggestions: TableGroupSuggestion[]) => void;
 }
 
-export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete, onDeletePdf, onReset }: SidebarProps) {
+export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete, onDeletePdf, onReset, onTableGroupSuggestions }: SidebarProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadTime, setUploadTime] = useState<number | null>(null);
@@ -72,6 +73,9 @@ export default function Sidebar({ sessionId, pdfs, totalTables, onUploadComplete
       setUploadProgress(100);
       setTimeout(() => setUploadProgress(null), 800);
       onUploadComplete(result.session_id, result.pdfs, result.total_tables, result.total_pages ?? 0);
+      if (result.table_group_suggestions && result.table_group_suggestions.length > 0 && onTableGroupSuggestions) {
+        onTableGroupSuggestions(result.table_group_suggestions);
+      }
       refreshCurrentSession();
       api.getSessions().then((data: import('../types').SessionsResponse) => {
         setSessions(data.sessions ?? []);

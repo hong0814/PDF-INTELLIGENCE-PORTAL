@@ -152,3 +152,10 @@ export interface UnifiedFollowupMessage {
   sources?: UnifiedSource[];
   isLoading?: boolean;
 }
+
+export interface AuthConfig {
+  enabled: boolean;
+  idle_timeout_seconds: number;
+  warn_before_seconds: number;
+  session_ttl_seconds: number;
+}

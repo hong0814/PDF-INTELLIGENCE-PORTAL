@@ -101,7 +101,7 @@ export default function CreditReviewView() {
           handleLoadImages={handleLoadImages}
         />
       ) : (
-        <DocumentViewer tableFilter="inner" />
+        <DocumentViewer tableFilter="inner-or-standalone" />
       )}
     </div>
   );

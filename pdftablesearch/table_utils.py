@@ -34,6 +34,21 @@ def _row_has_header_keywords(row: list[str]) -> bool:
     return any(kw in combined for kw in _HEADER_KEYWORDS)
 
 
+def _get_page_last_line(doc, pn: int) -> str:
+    page = doc[pn - 1]
+    text = page.get_text("text").strip()
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    return lines[-1] if lines else ""
+
+
+def _extract_sub_title(text_above: str, max_lines: int = 3) -> str:
+    lines = [l.strip() for l in text_above.split("\n") if l.strip()]
+    if not lines:
+        return ""
+    taken = lines[-max_lines:]
+    return "\n".join(taken)
+
+
 def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
     try:
         import fitz
@@ -100,10 +115,17 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
                 clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
                 text_above = page.get_text("text", clip=clip).strip()
                 if text_above and len(text_above) <= 150:
-                    last_line = text_above.split("\n")[-1].strip()
-                    if last_line and len(last_line) <= 80:
+                    sub = _extract_sub_title(text_above)
+                    if sub and len(sub) <= 120:
                         if not t.get("table_title"):
-                            t["table_title"] = last_line
+                            t["table_title"] = sub
+                        t["sub_title"] = sub
+                elif not text_above and pn > 1:
+                    prev_line = _get_page_last_line(doc, pn - 1)
+                    if prev_line and len(prev_line) <= 80:
+                        if not t.get("table_title"):
+                            t["table_title"] = prev_line
+                        t["sub_title"] = prev_line
 
 
         for fi, ft, ft_text in fitz_data:
@@ -140,13 +162,20 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
             table_html = "".join(html_parts)
 
             table_title = ""
+            sub_title = ""
             y_top_pymupdf = fbbox[1]
             clip = fitz.Rect(0, max(0, y_top_pymupdf - 50), page_w, y_top_pymupdf)
             text_above = page.get_text("text", clip=clip).strip()
             if text_above and len(text_above) <= 150:
-                last_line = text_above.split("\n")[-1].strip()
-                if last_line and len(last_line) <= 80:
-                    table_title = last_line
+                sub = _extract_sub_title(text_above)
+                if sub and len(sub) <= 120:
+                    table_title = sub
+                    sub_title = sub
+            elif not text_above and pn > 1:
+                prev_line = _get_page_last_line(doc, pn - 1)
+                if prev_line and len(prev_line) <= 80:
+                    table_title = prev_line
+                    sub_title = prev_line
 
             new_id = f"table_{pn}_fitz{fi}"
             new_table = {
@@ -155,6 +184,7 @@ def _enrich_tables_with_pymupdf(pdf_path: str, tables: list[dict]) -> None:
                 "bounding_box": [round(v, 2) for v in pdf_bbox],
                 "table_html": table_html,
                 "table_title": table_title or None,
+                "sub_title": sub_title or None,
                 "document_name": tables[0].get("document_name", "") if tables else "",
             }
             tables.append(new_table)
@@ -389,6 +419,7 @@ def _build_tables_from_pymupdf(
                 source = "pymupdf"
 
         title = hybrid_title or ""
+        sub_title = ""
         if not title:
             try:
                 title_page = doc[o["page"] - 1]
@@ -396,11 +427,27 @@ def _build_tables_from_pymupdf(
                 clip = fitz.Rect(0, max(0, y_top - 50), title_page.rect.width, y_top)
                 text_above = title_page.get_text("text", clip=clip).strip()
                 if text_above and len(text_above) <= 150:
-                    last_line = text_above.split("\n")[-1].strip()
-                    if last_line and len(last_line) <= 80:
-                        title = last_line
+                    sub = _extract_sub_title(text_above)
+                    if sub and len(sub) <= 120:
+                        title = sub
             except Exception:
                 pass
+
+        try:
+            title_page = doc[o["page"] - 1]
+            y_top = o["bbox"][1]
+            clip = fitz.Rect(0, max(0, y_top - 50), title_page.rect.width, y_top)
+            text_above = title_page.get_text("text", clip=clip).strip()
+            if text_above and len(text_above) <= 150:
+                sub = _extract_sub_title(text_above)
+                if sub and len(sub) <= 120:
+                    sub_title = sub
+            elif not text_above and o["page"] > 1:
+                prev_line = _get_page_last_line(doc, o["page"] - 1)
+                if prev_line and len(prev_line) <= 80:
+                    sub_title = prev_line
+        except Exception:
+            pass
 
         inner_ids = []
         for inner_idx in o.get("inner_table_indices", []):
@@ -474,6 +521,7 @@ def _build_tables_from_pymupdf(
             "bounding_box": final_bbox,
             "table_html": table_html,
             "table_title": title or None,
+            "sub_title": sub_title or None,
             "document_name": doc_name,
             "has_inner_tables": has_inner,
             "is_inner": False,

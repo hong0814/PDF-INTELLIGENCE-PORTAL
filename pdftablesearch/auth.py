@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 import jwt
 import ldap3
@@ -19,6 +20,67 @@ from pdftablesearch.config import get_settings
 logger = logging.getLogger(__name__)
 
 _INSECURE_DEFAULT_SECRET = "dev-secret-change-me"
+
+
+# ---------------------------------------------------------------------------
+# In-memory session activity tracking (for idle timeout)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ActivityEntry:
+    last_activity: float
+    issued_at: float
+
+
+_session_activity: Dict[str, _ActivityEntry] = {}
+
+
+def _touch_session(jti: str) -> None:
+    """Update last_activity for the given JWT jti."""
+    settings = get_settings()
+    now = time.time()
+    entry = _session_activity.get(jti)
+    if entry is None:
+        return
+    ttl = settings.auth_session_ttl_seconds
+    if now - entry.issued_at > ttl:
+        _session_activity.pop(jti, None)
+        return
+    if now - entry.last_activity > settings.auth_idle_timeout_seconds:
+        _session_activity.pop(jti, None)
+        return
+    entry.last_activity = now
+
+
+def _is_session_active(jti: str) -> bool:
+    """Check if the session associated with jti is still active (not idle-expired)."""
+    settings = get_settings()
+    entry = _session_activity.get(jti)
+    if entry is None:
+        return False
+    now = time.time()
+    if now - entry.issued_at > settings.auth_session_ttl_seconds:
+        _session_activity.pop(jti, None)
+        return False
+    if now - entry.last_activity > settings.auth_idle_timeout_seconds:
+        _session_activity.pop(jti, None)
+        return False
+    return True
+
+
+def _end_session(jti: str) -> None:
+    _session_activity.pop(jti, None)
+
+
+def auth_config_dict() -> dict[str, Any]:
+    settings = get_settings()
+    enabled = bool(settings.ldap_server_url)
+    return {
+        "enabled": enabled,
+        "idle_timeout_seconds": settings.auth_idle_timeout_seconds,
+        "warn_before_seconds": settings.auth_warn_before_seconds,
+        "session_ttl_seconds": settings.auth_session_ttl_seconds,
+    }
 
 
 class LDAPUser(BaseModel):
@@ -176,9 +238,8 @@ def ldap_client_from_settings() -> LDAPClient:
 
 
 def issue_auth_token(user: LDAPUser) -> tuple[str, int]:
-    """Issue a signed session token and return ``(token, ttl_seconds)``."""
     settings = get_settings()
-    ttl_seconds = max(1, settings.auth_token_expire_hours) * 3600
+    ttl_seconds = max(1, settings.auth_session_ttl_seconds)
     now = int(time.time())
     payload = {
         "sub": "session",
@@ -188,11 +249,12 @@ def issue_auth_token(user: LDAPUser) -> tuple[str, int]:
         **user.model_dump(),
     }
     token = jwt.encode(payload, settings.auth_secret_key, algorithm="HS256")
+    jti = payload["jti"]
+    _session_activity[jti] = _ActivityEntry(last_activity=float(now), issued_at=float(now))
     return token, ttl_seconds
 
 
 def decode_auth_token(token: str) -> LDAPUser | None:
-    """Validate and decode a session token."""
     settings = get_settings()
     try:
         payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
@@ -203,6 +265,12 @@ def decode_auth_token(token: str) -> LDAPUser | None:
 
     if payload.get("sub") != "session":
         return None
+
+    jti = payload.get("jti", "")
+    if settings.ldap_server_url and not _is_session_active(jti):
+        return None
+
+    _touch_session(jti)
 
     claims = {
         key: value
@@ -255,6 +323,34 @@ async def get_current_user(
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     return user
+
+
+def touch_auth_session(request: Request) -> bool:
+    settings = get_settings()
+    token = request.cookies.get(settings.auth_cookie_name)
+    if not token:
+        return False
+    try:
+        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return False
+    jti = payload.get("jti", "")
+    if not _is_session_active(jti):
+        return False
+    _touch_session(jti)
+    return True
+
+
+def end_auth_session(request: Request) -> None:
+    settings = get_settings()
+    token = request.cookies.get(settings.auth_cookie_name)
+    if not token:
+        return
+    try:
+        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return
+    _end_session(payload.get("jti", ""))
 
 
 def warn_if_insecure_auth_secret() -> None:

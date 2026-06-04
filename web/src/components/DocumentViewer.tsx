@@ -11,6 +11,7 @@ interface TableOverlay {
   x: number; y: number; w: number; h: number;
   html: string;
   title: string | null;
+  sub_title?: string | null;
   group_id?: string;
   group_table_ids?: string[];
   merged_html?: string;
@@ -18,7 +19,7 @@ interface TableOverlay {
   is_inner?: boolean;
 }
 
-export type TableFilterMode = 'all' | 'outer' | 'inner';
+export type TableFilterMode = 'all' | 'outer' | 'inner' | 'inner-or-standalone';
 
 const HIGHLIGHT_COLOR = 'rgba(255, 200, 0, 0.35)';
 const HIGHLIGHT_BORDER_COLOR = 'rgba(255, 160, 0, 0.7)';
@@ -120,6 +121,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
         w: Math.abs(vx2 - vx1), h: Math.abs(vy2 - vy1),
         html: t.table_html || t.table_markdown || '',
         title: t.table_title || null,
+        sub_title: t.sub_title || null,
         group_id: t.group_id || undefined,
         group_table_ids: t.group_table_ids || undefined,
         merged_html: t.merged_table_html || undefined,
@@ -272,6 +274,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
   const currentPageTables = overlays.filter(o => o.page === currentPage).filter(o => {
     if (tableFilter === 'outer') return !o.is_inner;
     if (tableFilter === 'inner') return o.is_inner;
+    if (tableFilter === 'inner-or-standalone') return o.is_inner || !o.has_inner_tables;
     return true;
   });
 
@@ -396,10 +399,11 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
                   left: overlay.x, top: overlay.y,
                   width: overlay.w, height: overlay.h,
                 }}
-                title={overlay.title || '클릭하여 CSV 다운로드'}
+                title={overlay.sub_title ? `${overlay.title || ''} (${overlay.sub_title})` : (overlay.title || '클릭하여 CSV 다운로드')}
               >
                 <span className="absolute -top-5 left-1 text-[9px] bg-accent text-white px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                   {overlay.title || `표`}
+                  {overlay.sub_title && <span className="opacity-70 ml-1">· {overlay.sub_title}</span>}
                   {overlay.group_id && ' (연속표)'}
                 </span>
               </div>
