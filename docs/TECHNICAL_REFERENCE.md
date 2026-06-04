@@ -287,6 +287,7 @@ PyMuPDF 표 감지 결과와 Hybrid HTML/JSON 결과를 융합하여 최종 표 
     "bounding_box": [x0, y0, x1, y1],  # PDF 좌표 (좌하단 원점)
     "table_html": "<table>...</table>",
     "table_title": "투자비용",
+    "sub_title": "투자비용\n(단위: 억원)",    # 표 상단 텍스트 (최대 3줄)
     "document_name": "busan",
     "has_inner_tables": True,
     "is_inner": False,
@@ -805,6 +806,61 @@ _sessions: Dict[str, dict] = {
 
 > **주의**: 세션은 인메모리(`_sessions` dict)에 저장된다. 서버 `--reload` 재시작 시 모든 세션이 손실되며 PDF 재업로드가 필요하다.
 
+### 9.3 세션 Idle Timeout
+
+**파일**: `pdftablesearch/auth.py`, `web/src/components/SessionTimeoutGuard.tsx`
+
+```
+auth.py:
+  _session_activity: dict[str, float]  # session_id → 마지막 활동 timestamp
+  idle_timeout: 600초 (10분, config.auth_idle_timeout_seconds)
+  warn_before: 60초 (만료 1분 전 경고, config.auth_warn_before_seconds)
+  session_ttl: 3600초 (1시간 절대 만료, config.auth_session_ttl_seconds)
+
+_touch_session(session_id): 매 요청마다 활동 시간 갱신
+_is_session_active(session_id): idle_timeout 기준으로 유효성 검증
+_end_session(session_id): 세션 만료 처리
+
+프론트엔드 SessionTimeoutGuard:
+  - 우측 하단 타이머 (mm:ss 형식)
+  - mousemove/click/keydown/scroll/touchstart 감지 → 매 30초마다 POST /api/auth/touch
+  - 만료 1분 전 경고 모달 → "확인" 시 touch 갱신
+  - 만료 시 자동 로그아웃 + 재로그인 유도
+```
+
+### 9.4 서비스 이용 동의 (AgreementOverlay)
+
+**파일**: `web/src/components/AgreementOverlay.tsx`
+
+- 로그인 후 최초 1회 모달 팝업으로 서비스 이용 동의 수락
+- `sessionStorage`에 동의 상태 저장 (탭 간 공유 불가, 세션 단위)
+- "확인" 시 닫고 메인 화면 진입
+
+### 9.5 기업금융심사 테이블 필터
+
+**파일**: `web/src/components/CreditReviewView.tsx`, `web/src/components/DocumentViewer.tsx`
+
+```typescript
+// DocumentViewer.tsx
+export type TableFilterMode = 'all' | 'outer' | 'inner' | 'inner-or-standalone';
+
+const currentPageTables = overlays.filter(o => o.page === currentPage).filter(o => {
+    if (tableFilter === 'outer') return !o.is_inner;
+    if (tableFilter === 'inner') return o.is_inner;
+    if (tableFilter === 'inner-or-standalone') return o.is_inner || !o.has_inner_tables;
+    return true;  // 'all'
+});
+
+// CreditReviewView.tsx
+<DocumentViewer tableFilter="inner-or-standalone" />
+```
+
+필터 동작:
+- `inner-or-standalone`: 이중표(outer with inner) → inner 테이블만, 일반표(outer without inner) → outer 표시
+- `inner`: inner 테이블만 표시
+- `outer`: outer 테이블만 표시
+- `all`: 모든 테이블 표시
+
 ---
 
 ## 10. API 레퍼런스
@@ -816,6 +872,8 @@ _sessions: Dict[str, dict] = {
 | `POST` | `/api/auth/login` | LDAP 로그인 → JWT httpOnly 쿠키 발급 |
 | `POST` | `/api/auth/logout` | 쿠키 삭제 |
 | `GET` | `/api/auth/me` | 현재 사용자 정보 |
+| `GET` | `/api/auth/config` | 세션 타임아웃 설정 (idle_timeout, warn_before, session_ttl) |
+| `POST` | `/api/auth/touch` | 세션 활동 시간 갱신 (idle timeout 리셋) |
 
 ### 세션
 
@@ -924,17 +982,19 @@ data: {"error": "오류 메시지"}
 
 | 컴포넌트 | 역할 |
 |----------|------|
-| `App.tsx` | 루트 레이아웃, 업로드/검색 핸들러 |
-| `Sidebar.tsx` | PDF 업로드, 목록, 세션 관리 |
+| `App.tsx` | 루트 레이아웃, 업로드/검색 핸들러, authConfig 통합 |
+| `Sidebar.tsx` | PDF 업로드, 목록, 세션 관리, 병합 팝업 |
 | `TabBar.tsx` | 탭 네비게이션 |
 | `SearchBar.tsx` | 검색어 입력 + PDF 필터 |
 | `SearchResults.tsx` | 검색 결과 표시 |
 | `TableCard.tsx` | 표 카드 (iframe 렌더링, Q&A, 다운로드) |
 | `QAPanel.tsx` | 문서 QA 채팅 |
 | `ChatBubble.tsx` | 메시지 + 출처 팝업 → PDF 하이라이트 |
-| `DocumentViewer.tsx` | PDF 렌더링 (pdf.js) + 표 오버레이 |
-| `CreditReviewView.tsx` | 기업금융심사 (이미지 분석) |
+| `DocumentViewer.tsx` | PDF 렌더링 (pdf.js) + 표 오버레이 + inner-or-standalone 필터 |
+| `CreditReviewView.tsx` | 기업금융심사 (이미지 분석, inner-or-standalone 모드) |
 | `TableGroupSuggestionPopup.tsx` | 다중페이지 표 병합 팝업 |
+| `SessionTimeoutGuard.tsx` | 세션 idle timeout 타이머 + 만료 경고 모달 |
+| `AgreementOverlay.tsx` | 로그인 후 서비스 이용 동의 팝업 |
 
 ### 11.3 PDF 렌더링 & 하이라이트
 

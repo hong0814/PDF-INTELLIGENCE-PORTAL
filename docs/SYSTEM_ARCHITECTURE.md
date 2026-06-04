@@ -529,3 +529,65 @@ local_embeddings.py: if 설정된 경로 존재 → SentenceTransformer(경로) 
 - **저장소**: 인메모리 `_sessions` 딕셔너리 (서버 재시작 시 손실)
 - **격리**: 각 세션 = 독립 임시 디렉토리 (업로드, Weaviate, BM25)
 - **정리**: 세션 삭제 시 임시 디렉토리 `shutil.rmtree()`
+
+### 7.9 세션 Idle Timeout
+
+```
+auth.py:
+  _session_activity: dict[str, float]  # session_id → 마지막 활동 timestamp
+  idle_timeout: 600초 (10분)
+  warn_before: 60초 (만료 1분 전 경고)
+  session_ttl: 3600초 (1시간 절대 만료)
+
+_touch_session(): 매 요청마다 활동 시간 갱신
+_end_session(): 세션 만료 처리
+
+web_server.py:
+  GET /api/auth/config  → idle_timeout, warn_before_seconds, session_ttl 반환
+  POST /api/auth/touch  → 클라이언트 주기적 활동 신호 (30초 간격)
+
+SessionTimeoutGuard.tsx:
+  - 우측 하단 세션 타이머 (mm:ss)
+  - mousemove/click/keydown/scroll/touchstart 감지 → 30초 간격 touch API
+  - 만료 1분 전 경고 모달
+  - 만료 시 자동 로그아웃
+```
+
+### 7.10 서비스 이용 동의
+
+```
+AgreementOverlay.tsx:
+  - 로그인 후 최초 1회만 노출
+  - sessionStorage로 동의 상태 저장
+  - 세션 만료 또는 새 로그인 시 재표시
+```
+
+### 7.11 표 부제 (sub_title) 추출
+
+```
+table_utils.py:
+  _extract_sub_title(text_above, max_lines=3):
+    → 표 상단 50pt 클리핑 영역의 텍스트에서 최대 3줄을 sub_title로 추출
+    → 표가 페이지 최상단이고 텍스트 없으면 이전 페이지 마지막 줄 폴백
+
+  sub_title 활용:
+    - session API: /api/documents/tables 응답에 sub_title 포함
+    - Weaviate 인덱싱: page_content 앞에 sub_title 추가 (검색 가능)
+    - LLM 컨텍스트: 부제: 필드로 분리 표시
+
+예시:
+  제목: 현대자동차 기아 판매실적 및 동사 취급대수 추이
+  → sub_title: 영업자산 현황\n(단위: 억원)
+```
+
+### 7.12 기업금융심사 테이블 필터
+
+```
+CreditReviewView.tsx:
+  tableFilter="inner-or-standalone":
+    → 이중표(outer with inner) → inner 테이블만 표시
+    → 일반표(outer without inner) → outer 테이블 자체 표시
+
+DocumentViewer.tsx:
+  TableFilterMode = 'all' | 'outer' | 'inner' | 'inner-or-standalone'
+```
