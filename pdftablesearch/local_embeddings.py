@@ -36,19 +36,23 @@ class SentenceTransformerEmbeddings(Embeddings):
 
     def __init__(
         self,
-        model_name: str = _DEFAULT_MODEL,
-        device: str = "cpu",
+        model_name: str | None = None,
+        device: str | None = None,
         local_model_path: str = "",
     ) -> None:
+        try:
+            from pdftablesearch.config import get_settings
+
+            settings = get_settings()
+            model_name = model_name or settings.local_embedding_model or _DEFAULT_MODEL
+            device = device or settings.embedding_device or "cpu"
+            local_model_path = local_model_path or settings.local_embedding_model_path or ""
+        except Exception:
+            model_name = model_name or _DEFAULT_MODEL
+            device = device or "cpu"
+
         self.model_name = model_name
         self.device = device
-
-        if not local_model_path:
-            try:
-                from pdftablesearch.config import get_settings
-                local_model_path = get_settings().local_embedding_model_path or ""
-            except Exception:
-                pass
 
         if local_model_path and os.path.isdir(local_model_path):
             model_path = local_model_path
