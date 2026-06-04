@@ -14,6 +14,9 @@ import TranslationView from './components/TranslationView';
 import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
 import LoginScreen from './components/LoginScreen';
 import SessionTimeoutGuard from './components/SessionTimeoutGuard';
+import AgreementOverlay from './components/AgreementOverlay';
+
+const AGREEMENT_ACCEPTED_KEY = 'pdf_portal_agreement_accepted';
 
 export default function App() {
   const sessionId = useAppStore((s) => s.sessionId);
@@ -34,6 +37,7 @@ export default function App() {
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [pendingAuthStatus, setPendingAuthStatus] = useState<AuthStatus | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
 
   const isAuthenticated = authStatus?.authenticated === true;
@@ -51,8 +55,12 @@ export default function App() {
         }
         const status = await api.getCurrentAuth();
         if (!cancelled) {
-          setAuthStatus(status);
           setAuthConfig(status);
+          if (sessionStorage.getItem(AGREEMENT_ACCEPTED_KEY) === '1') {
+            setAuthStatus(status);
+          } else {
+            setPendingAuthStatus(status);
+          }
         }
       } catch {
         if (!cancelled) setAuthStatus(null);
@@ -65,12 +73,14 @@ export default function App() {
   }, []);
 
   const handleLogin = useCallback((status: AuthStatus) => {
-    setAuthStatus(status);
     setAuthConfig(status);
+    setPendingAuthStatus(status);
   }, []);
 
   const handleAuthExpired = useCallback(() => {
     setAuthStatus(null);
+    setPendingAuthStatus(null);
+    sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
     localStorage.removeItem('pdftablesearch_session_id');
     useAppStore.setState({
       activeTab: 'main',
@@ -92,6 +102,20 @@ export default function App() {
       highlightRegion: null,
     });
   }, []);
+
+  const handleAgreementConfirm = useCallback(() => {
+    if (!pendingAuthStatus) return;
+    sessionStorage.setItem(AGREEMENT_ACCEPTED_KEY, '1');
+    setAuthStatus(pendingAuthStatus);
+    setAuthConfig(pendingAuthStatus);
+    setPendingAuthStatus(null);
+  }, [pendingAuthStatus]);
+
+  const handleAgreementCancel = useCallback(() => {
+    setPendingAuthStatus(null);
+    sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
+    void api.logout().finally(handleAuthExpired);
+  }, [handleAuthExpired]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
@@ -225,7 +249,17 @@ export default function App() {
   }
 
   if (!isAuthenticated) {
-    return <LoginScreen onLogin={handleLogin} />;
+    return (
+      <>
+        <LoginScreen onLogin={handleLogin} />
+        {pendingAuthStatus && (
+          <AgreementOverlay
+            onCancel={handleAgreementCancel}
+            onConfirm={handleAgreementConfirm}
+          />
+        )}
+      </>
+    );
   }
 
   if (!sessionId) {

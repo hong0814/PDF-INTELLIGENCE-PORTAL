@@ -318,7 +318,9 @@ LDAP_BIND_PASSWORD=secret
 LDAP_USER_FILTER=(uid={username})
 ```
 
-로그인 성공 시 API는 `pdf_portal_auth` httpOnly 쿠키와 `pdf_portal_auth_presence` marker 쿠키를 설정합니다. `/api/auth/config`가 idle timeout 값을 UI로 내려주고, React idle timer와 FastAPI middleware가 같은 600초 설정을 사용합니다.
+로그인 성공 시 API는 `pdf_portal_auth` httpOnly 쿠키와 `pdf_portal_auth_presence` marker 쿠키를 설정합니다. `/api/auth/config`가 idle timeout 값을 UI로 내려주고, React idle timer와 FastAPI middleware가 같은 600초 설정을 사용합니다. 로그인 후 화면 하단에는 남은 세션 시간이 `m:ss` 형식으로 표시되고, 마지막 60초에는 경고 모달에서 세션을 연장할 수 있습니다. 시간을 바꾸려면 `.env`의 `AUTH_IDLE_TIMEOUT_SECONDS`, `AUTH_WARN_BEFORE_SECONDS`, `AUTH_SESSION_TTL_SECONDS` 값을 조정합니다.
+
+로그인 직후에는 PDF 처리 데이터 이용 안내 동의문이 표시됩니다. 동의문은 PDF 내용 추출, 표 CSV 다운로드, 번역 보조, 개인정보/민감정보 마스킹, 업로드 PDF 원본 7일 후 삭제 정책을 안내하며, 체크박스 동의 후에만 앱 화면으로 진입합니다.
 
 #### Weaviate 설치 방식
 
