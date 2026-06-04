@@ -34,13 +34,15 @@ from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
 from pdftablesearch.auth import (
     LDAPUser,
     auth_config,
+    call_otp_subprocess,
     clear_auth_cookie,
-    create_pre_auth_session,
+    client_ip,
+    decode_pre_auth_jwt,
     get_current_user,
-    issue_auth_token,
+    issue_pre_auth_jwt,
+    issue_session_jwt,
     ldap_client_from_settings,
     set_auth_cookie,
-    verify_otp,
     warn_if_insecure_auth_secret,
 )
 from pdftablesearch.config import get_settings
@@ -53,6 +55,11 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 
 from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
 from pdftablesearch.models import TableSearchResult
+from pdftablesearch.session_store import (
+    delete_session as delete_auth_session,
+    read_session,
+    write_session,
+)
 from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
 from pdftablesearch.table_utils import (
@@ -150,14 +157,19 @@ class UpdateSessionRequest(BaseModel):
     name: str
 
 
+class LDAPAuthRequest(BaseModel):
+    id: str
+    password: str
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
 
 
-class OtpRequest(BaseModel):
+class OTPAuthRequest(BaseModel):
     pre_auth_token: str
-    otp_code: str
+    otp: str
 
 
 @dataclass
@@ -422,38 +434,87 @@ async def auth_config_endpoint() -> JSONResponse:
     return JSONResponse(content=auth_config())
 
 
+@app.post("/api/auth/ldap")
+async def ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
+    client = ldap_client_from_settings()
+    user = client.authenticate(body.id, body.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="invalid_credentials")
+
+    return JSONResponse(content={"pre_auth_token": issue_pre_auth_jwt(user)})
+
+
 @app.post("/api/auth/login")
 async def login(body: LoginRequest) -> JSONResponse:
-    client = ldap_client_from_settings()
-    user = client.authenticate(body.username, body.password)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    pre_auth = create_pre_auth_session(user)
-    return JSONResponse(
-        content={
-            "requires_otp": True,
-            "pre_auth_token": pre_auth.token,
-            "user": user.model_dump(),
-            **auth_config(),
-        }
-    )
+    return await ldap_auth(LDAPAuthRequest(id=body.username, password=body.password))
 
 
 @app.post("/api/auth/otp")
-async def otp(body: OtpRequest) -> JSONResponse:
-    user = verify_otp(body.pre_auth_token, body.otp_code)
-    token, ttl_seconds = issue_auth_token(user)
-    response = JSONResponse(content={"user": user.model_dump(), **auth_config()})
+async def otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
+    user_data = decode_pre_auth_jwt(body.pre_auth_token)
+    if user_data is None:
+        raise HTTPException(status_code=401, detail="session_expired")
+
+    result = await call_otp_subprocess(
+        user_id=str(user_data["user_id"]),
+        otp=body.otp,
+        client_ip_str=client_ip(request),
+    )
+    if result == "6000":
+        raise HTTPException(status_code=401, detail="otp_failed")
+    if result != "0":
+        raise HTTPException(status_code=500, detail="otp_system_error")
+
+    token, ttl_seconds, jti = issue_session_jwt(user_data)
+    stored = await write_session(token, {**user_data, "jti": jti}, ttl_seconds)
+    if not stored:
+        raise HTTPException(status_code=503, detail="session_store_unavailable")
+
+    response = JSONResponse(content={"redirect": get_settings().auth_ui_url})
     set_auth_cookie(response, token, ttl_seconds)
     return response
 
 
 @app.post("/api/auth/logout")
-async def logout() -> JSONResponse:
+async def logout(request: Request) -> JSONResponse:
+    token = request.cookies.get(get_settings().auth_cookie_name)
+    if token:
+        await delete_auth_session(token)
     response = JSONResponse(content={"ok": True})
     clear_auth_cookie(response)
     return response
+
+
+@app.get("/api/auth/logout")
+async def logout_redirect(request: Request) -> Response:
+    token = request.cookies.get(get_settings().auth_cookie_name)
+    if token:
+        await delete_auth_session(token)
+    response = Response(status_code=302)
+    response.headers["Location"] = f"{get_settings().auth_ui_url}/login"
+    clear_auth_cookie(response)
+    return response
+
+
+@app.get("/api/auth/verify")
+async def verify_token(request: Request) -> JSONResponse:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_token")
+    token = auth_header[7:]
+    claims = await read_session(token)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="invalid_token")
+    return JSONResponse(content=claims)
+
+
+@app.delete("/api/auth/session")
+async def delete_token(request: Request) -> JSONResponse:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_token")
+    await delete_auth_session(auth_header[7:])
+    return JSONResponse(content={"deleted": True})
 
 
 @app.get("/api/auth/me")

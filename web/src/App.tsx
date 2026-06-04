@@ -45,6 +45,7 @@ export default function App() {
   const [otpError, setOtpError] = useState<string | null>(null);
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [preAuth, setPreAuth] = useState<LoginPreAuthResponse | null>(null);
+  const [pendingOtpUsername, setPendingOtpUsername] = useState('');
   const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
 
@@ -83,7 +84,7 @@ export default function App() {
     try {
       const nextPreAuth = await api.login({ username, password });
       setPreAuth(nextPreAuth);
-      setAuthConfig(nextPreAuth);
+      setPendingOtpUsername(username);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '로그인에 실패했습니다.');
     } finally {
@@ -97,10 +98,12 @@ export default function App() {
     setOtpSubmitting(true);
     setOtpError(null);
     try {
-      const status = await api.verifyOtp(preAuth.pre_auth_token, otpCode);
+      await api.verifyOtp(preAuth.pre_auth_token, otpCode);
+      const status = await api.getCurrentAuth();
       setAuthConfig(status);
       setPendingUser(status.user);
       setPreAuth(null);
+      setPendingOtpUsername('');
     } catch (error) {
       setOtpError(error instanceof Error ? error.message : 'OTP 인증에 실패했습니다.');
       throw error;
@@ -112,6 +115,7 @@ export default function App() {
   const handleAuthExpired = useCallback(() => {
     sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
     setPreAuth(null);
+    setPendingOtpUsername('');
     setPendingUser(null);
     clearAuth();
   }, [clearAuth]);
@@ -279,10 +283,10 @@ export default function App() {
         />
         {preAuth && (
           <OtpOverlay
-            preAuth={preAuth}
+            accountLabel={pendingOtpUsername}
             isSubmitting={otpSubmitting}
             error={otpError}
-            onCancel={() => { setPreAuth(null); setOtpError(null); }}
+            onCancel={() => { setPreAuth(null); setPendingOtpUsername(''); setOtpError(null); }}
             onSubmit={handleOtpSubmit}
           />
         )}

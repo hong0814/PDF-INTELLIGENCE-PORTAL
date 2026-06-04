@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import type { LoginPreAuthResponse } from '../types';
 
 interface OtpOverlayProps {
-  preAuth: LoginPreAuthResponse;
+  accountLabel: string;
   isSubmitting: boolean;
   error: string | null;
   onCancel: () => void;
@@ -10,7 +9,7 @@ interface OtpOverlayProps {
 }
 
 export default function OtpOverlay({
-  preAuth,
+  accountLabel,
   isSubmitting,
   error,
   onCancel,
@@ -34,7 +33,7 @@ export default function OtpOverlay({
           <div>
             <h2 className="text-base font-semibold text-[#f0f6fc]">OTP 인증</h2>
             <p className="mt-1 text-sm leading-5 text-[#9da7b3]">
-              <span className="text-[#f0f6fc]">{preAuth.user.name || preAuth.user.username}</span> 계정 확인을 위해 OTP 코드를 입력하세요.
+              <span className="text-[#f0f6fc]">{accountLabel}</span> 계정 확인을 위해 OTP 코드를 입력하세요.
             </p>
           </div>
           <button

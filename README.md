@@ -98,9 +98,16 @@ VECTOR_BACKEND=weaviate
 AUTH_SECRET_KEY=dev-secret-change-me
 AUTH_TOKEN_EXPIRE_HOURS=8
 AUTH_PRE_AUTH_TTL_SECONDS=300
-AUTH_OTP_CODE=123456
 AUTH_IDLE_TIMEOUT_SECONDS=600
 AUTH_WARN_BEFORE_SECONDS=60
+REDIS_URL=redis://localhost:6379/0
+
+# OTP subprocess
+OTP_JAR_PATH=packages/api/lib/otp-cli.jar
+OTP_SDK_PATH=
+OTP_ASSTSQ=
+OTP_COMPANY_CODE_DEV=tcapital
+OTP_COMPANY_CODE_PROD=pcapital
 
 # CORS
 CORS_ORIGINS=http://localhost:8000,http://localhost:5173
@@ -109,10 +116,13 @@ EOF
 # 4. LDAP 서버 시작 (선택)
 bash scripts/ldap/start.sh
 
-# 5. 하이브리드 변환 서버 시작
+# 5. Redis 시작
+redis-server --port 6379
+
+# 6. 하이브리드 변환 서버 시작
 opendataloader-pdf-hybrid --port 5002 &
 
-# 6. 프론트엔드 빌드
+# 7. 프론트엔드 빌드
 cd web && npm install && npm run build && cd ..
 
 # 7. FastAPI 서버 실행
@@ -167,11 +177,15 @@ open http://localhost:8000
 | `AUTH_SECRET_KEY` | `dev-secret-change-me` | JWT 서명 시크릿 |
 | `AUTH_TOKEN_EXPIRE_HOURS` | `8` | OTP 성공 후 발급되는 로그인 JWT 유효 시간 |
 | `AUTH_PRE_AUTH_TTL_SECONDS` | `300` | LDAP 성공 후 OTP 입력까지 허용되는 시간 |
-| `AUTH_OTP_CODE` | `123456` | 로컬 개발용 OTP 코드 |
 | `AUTH_IDLE_TIMEOUT_SECONDS` | `600` | 브라우저 idle logout 기준 시간 |
 | `AUTH_WARN_BEFORE_SECONDS` | `60` | 세션 만료 경고 표시 시작 시간 |
+| `REDIS_URL` | `redis://localhost:6379/0` | 로그인 세션 저장소 |
+| `OTP_JAR_PATH` | `packages/api/lib/otp-cli.jar` | OTP Java CLI JAR 경로 |
+| `OTP_SDK_PATH` | 빈 값 | OTP SDK JAR 경로, 없으면 `OTP_JAR_PATH`의 형제 `certifyOtp.jar` 사용 |
+| `OTP_COMPANY_CODE_DEV` | `tcapital` | 개발 환경 OTP 회사 코드 |
+| `OTP_COMPANY_CODE_PROD` | `pcapital` | 운영 환경 OTP 회사 코드 |
 
-로그인 흐름은 `ID/PW LDAP 인증 -> OTP 인증 -> 서비스 이용 동의 -> 앱 진입` 순서입니다. `/api/auth/login`은 LDAP ID/PW만 확인하고 임시 `pre_auth_token`을 반환하며, `/api/auth/otp`가 OTP를 확인한 뒤 JWT httpOnly 쿠키를 발급합니다.
+로그인 흐름은 `ID/PW LDAP 인증 -> OTP 인증 -> Redis 세션 저장 -> 서비스 이용 동의 -> 앱 진입` 순서입니다. `/api/auth/ldap`는 LDAP ID/PW만 확인하고 짧은 pre-auth JWT를 반환합니다. `/api/auth/otp`는 OTP Java subprocess 결과가 `0`일 때만 Redis에 세션을 저장하고, `auth_token` httpOnly 쿠키와 `auth_presence` 쿠키를 발급합니다.
 
 ---
 
@@ -238,9 +252,12 @@ pdftablesearch/
 | Method | Path | 설명 |
 |--------|------|------|
 | `GET` | `/api/auth/config` | OTP/idle timeout 설정 조회 |
-| `POST` | `/api/auth/login` | LDAP 로그인 → OTP pre-auth token 발급 |
-| `POST` | `/api/auth/otp` | OTP 검증 → JWT 쿠키 발급 |
-| `POST` | `/api/auth/logout` | 쿠키 삭제 |
+| `POST` | `/api/auth/ldap` | LDAP 로그인 → OTP pre-auth JWT 발급 |
+| `POST` | `/api/auth/login` | `/api/auth/ldap` 호환 wrapper |
+| `POST` | `/api/auth/otp` | OTP subprocess 검증 → Redis 세션 저장 → 쿠키 발급 |
+| `GET` | `/api/auth/verify` | Bearer token Redis 세션 검증 |
+| `DELETE` | `/api/auth/session` | Bearer token Redis 세션 삭제 |
+| `POST` | `/api/auth/logout` | Redis 세션 및 인증 쿠키 삭제 |
 | `POST` | `/api/auth/touch` | 로그인 상태 확인 및 idle timer 유지 |
 
 ### 세션

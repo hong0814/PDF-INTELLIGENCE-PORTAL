@@ -4,6 +4,7 @@ import type {
   LoginRequest,
   LoginPreAuthResponse,
   LoginResponse,
+  OtpResponse,
   UploadResponse,
   SearchResponse,
   SmartSearchResponse,
@@ -62,18 +63,18 @@ export async function getAuthConfig(): Promise<AuthConfig> {
 }
 
 export async function login(body: LoginRequest): Promise<LoginPreAuthResponse> {
-  return apiJson<LoginPreAuthResponse>(`${BASE}/auth/login`, {
+  return apiJson<LoginPreAuthResponse>(`${BASE}/auth/ldap`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ id: body.username, password: body.password }),
   });
 }
 
-export async function verifyOtp(preAuthToken: string, otpCode: string): Promise<LoginResponse> {
-  return apiJson<LoginResponse>(`${BASE}/auth/otp`, {
+export async function verifyOtp(preAuthToken: string, otpCode: string): Promise<OtpResponse> {
+  return apiJson<OtpResponse>(`${BASE}/auth/otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pre_auth_token: preAuthToken, otp_code: otpCode }),
+    body: JSON.stringify({ pre_auth_token: preAuthToken, otp: otpCode }),
   });
 }
 

@@ -29,6 +29,7 @@ dependencies = [
     "cryptography>=41.0.0",
     "ldap3>=2.9.0",
     "PyJWT>=2.8.0",
+    "redis>=5.0",
     "weaviate-client>=4.0.0",
 ]
 

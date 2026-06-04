@@ -112,18 +112,18 @@ export interface LoginRequest {
 export interface AuthConfig {
   idle_timeout_seconds: number;
   warn_before_seconds: number;
-  session_ttl_seconds: number;
-  pre_auth_ttl_seconds: number;
 }
 
 export interface LoginResponse extends AuthConfig {
   user: AuthUser;
 }
 
-export interface LoginPreAuthResponse extends AuthConfig {
-  requires_otp: true;
+export interface LoginPreAuthResponse {
   pre_auth_token: string;
-  user: AuthUser;
+}
+
+export interface OtpResponse {
+  redirect: string;
 }
 
 export interface TableQAItem {
