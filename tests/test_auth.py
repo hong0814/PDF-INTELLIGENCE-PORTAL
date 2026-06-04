@@ -117,6 +117,25 @@ def test_ldap_returns_pre_auth_jwt_without_cookie(monkeypatch) -> None:
     assert not client.cookies.get(get_settings().auth_cookie_name)
 
 
+def test_internal_auth_routes_match_analytics_agent_paths(monkeypatch) -> None:
+    client = TestClient(app)
+    _patch_ldap(monkeypatch)
+    _patch_otp(monkeypatch)
+    _patch_sessions(monkeypatch)
+
+    ldap_response = client.post(
+        "/auth/ldap",
+        json={"id": "admin", "password": "admin"},
+    )
+    assert ldap_response.status_code == 200
+
+    otp_response = client.post(
+        "/auth/otp",
+        json={"pre_auth_token": ldap_response.json()["pre_auth_token"], "otp": "123456"},
+    )
+    assert otp_response.status_code == 200
+
+
 def test_legacy_login_route_wraps_ldap_contract(monkeypatch) -> None:
     client = TestClient(app)
     _patch_ldap(monkeypatch)

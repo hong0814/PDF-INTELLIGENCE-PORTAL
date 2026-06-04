@@ -429,12 +429,17 @@ class ConfirmGroupRequest(BaseModel):
     rejected: list[dict]
 
 
-@app.get("/api/auth/config")
+@app.get("/auth/config")
 async def auth_config_endpoint() -> JSONResponse:
     return JSONResponse(content=auth_config())
 
 
-@app.post("/api/auth/ldap")
+@app.get("/api/auth/config")
+async def api_auth_config_endpoint() -> JSONResponse:
+    return await auth_config_endpoint()
+
+
+@app.post("/auth/ldap")
 async def ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
     client = ldap_client_from_settings()
     user = client.authenticate(body.id, body.password)
@@ -444,12 +449,17 @@ async def ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
     return JSONResponse(content={"pre_auth_token": issue_pre_auth_jwt(user)})
 
 
+@app.post("/api/auth/ldap")
+async def api_ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
+    return await ldap_auth(body)
+
+
 @app.post("/api/auth/login")
 async def login(body: LoginRequest) -> JSONResponse:
     return await ldap_auth(LDAPAuthRequest(id=body.username, password=body.password))
 
 
-@app.post("/api/auth/otp")
+@app.post("/auth/otp")
 async def otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
     user_data = decode_pre_auth_jwt(body.pre_auth_token)
     if user_data is None:
@@ -475,7 +485,12 @@ async def otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
     return response
 
 
-@app.post("/api/auth/logout")
+@app.post("/api/auth/otp")
+async def api_otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
+    return await otp(body, request)
+
+
+@app.post("/auth/logout")
 async def logout(request: Request) -> JSONResponse:
     token = request.cookies.get(get_settings().auth_cookie_name)
     if token:
@@ -485,7 +500,12 @@ async def logout(request: Request) -> JSONResponse:
     return response
 
 
-@app.get("/api/auth/logout")
+@app.post("/api/auth/logout")
+async def api_logout(request: Request) -> JSONResponse:
+    return await logout(request)
+
+
+@app.get("/auth/logout")
 async def logout_redirect(request: Request) -> Response:
     token = request.cookies.get(get_settings().auth_cookie_name)
     if token:
@@ -496,7 +516,12 @@ async def logout_redirect(request: Request) -> Response:
     return response
 
 
-@app.get("/api/auth/verify")
+@app.get("/api/auth/logout")
+async def api_logout_redirect(request: Request) -> Response:
+    return await logout_redirect(request)
+
+
+@app.get("/auth/verify")
 async def verify_token(request: Request) -> JSONResponse:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -508,7 +533,12 @@ async def verify_token(request: Request) -> JSONResponse:
     return JSONResponse(content=claims)
 
 
-@app.delete("/api/auth/session")
+@app.get("/api/auth/verify")
+async def api_verify_token(request: Request) -> JSONResponse:
+    return await verify_token(request)
+
+
+@app.delete("/auth/session")
 async def delete_token(request: Request) -> JSONResponse:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -517,14 +547,29 @@ async def delete_token(request: Request) -> JSONResponse:
     return JSONResponse(content={"deleted": True})
 
 
-@app.get("/api/auth/me")
+@app.delete("/api/auth/session")
+async def api_delete_token(request: Request) -> JSONResponse:
+    return await delete_token(request)
+
+
+@app.get("/auth/me")
 async def me(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
     return JSONResponse(content={"user": current_user.model_dump(), **auth_config()})
 
 
-@app.post("/api/auth/touch")
+@app.get("/api/auth/me")
+async def api_me(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return await me(current_user)
+
+
+@app.post("/auth/touch")
 async def touch(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
     return JSONResponse(content={"ok": True, "user": current_user.model_dump(), **auth_config()})
+
+
+@app.post("/api/auth/touch")
+async def api_touch(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return await touch(current_user)
 
 
 @app.post("/api/confirm-table-groups")

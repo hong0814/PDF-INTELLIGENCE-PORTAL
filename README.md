@@ -185,7 +185,7 @@ open http://localhost:8000
 | `OTP_COMPANY_CODE_DEV` | `tcapital` | 개발 환경 OTP 회사 코드 |
 | `OTP_COMPANY_CODE_PROD` | `pcapital` | 운영 환경 OTP 회사 코드 |
 
-로그인 흐름은 `ID/PW LDAP 인증 -> OTP 인증 -> Redis 세션 저장 -> 서비스 이용 동의 -> 앱 진입` 순서입니다. `/api/auth/ldap`는 LDAP ID/PW만 확인하고 짧은 pre-auth JWT를 반환합니다. `/api/auth/otp`는 OTP Java subprocess 결과가 `0`일 때만 Redis에 세션을 저장하고, `auth_token` httpOnly 쿠키와 `auth_presence` 쿠키를 발급합니다.
+로그인 흐름은 `ID/PW LDAP 인증 -> OTP 인증 -> Redis 세션 저장 -> 서비스 이용 동의 -> 앱 진입` 순서입니다. API 내부 기준 라우트는 `/auth/ldap`, `/auth/otp`입니다. React 브라우저 호출은 같은-origin API prefix를 통해 `/api/auth/ldap`, `/api/auth/otp`로 들어오며, 백엔드는 이를 내부 `/auth/*` 처리와 같은 로직으로 넘깁니다. `/auth/otp`는 OTP Java subprocess 결과가 `0`일 때만 Redis에 세션을 저장하고, `auth_token` httpOnly 쿠키와 `auth_presence` 쿠키를 발급합니다.
 
 ---
 
@@ -251,14 +251,15 @@ pdftablesearch/
 
 | Method | Path | 설명 |
 |--------|------|------|
-| `GET` | `/api/auth/config` | OTP/idle timeout 설정 조회 |
-| `POST` | `/api/auth/ldap` | LDAP 로그인 → OTP pre-auth JWT 발급 |
-| `POST` | `/api/auth/login` | `/api/auth/ldap` 호환 wrapper |
-| `POST` | `/api/auth/otp` | OTP subprocess 검증 → Redis 세션 저장 → 쿠키 발급 |
-| `GET` | `/api/auth/verify` | Bearer token Redis 세션 검증 |
-| `DELETE` | `/api/auth/session` | Bearer token Redis 세션 삭제 |
-| `POST` | `/api/auth/logout` | Redis 세션 및 인증 쿠키 삭제 |
-| `POST` | `/api/auth/touch` | 로그인 상태 확인 및 idle timer 유지 |
+| `GET` | `/auth/config` | OTP/idle timeout 설정 조회 |
+| `POST` | `/auth/ldap` | LDAP 로그인 → OTP pre-auth JWT 발급 |
+| `POST` | `/auth/otp` | OTP subprocess 검증 → Redis 세션 저장 → 쿠키 발급 |
+| `GET` | `/auth/verify` | Bearer token Redis 세션 검증 |
+| `DELETE` | `/auth/session` | Bearer token Redis 세션 삭제 |
+| `POST` | `/auth/logout` | Redis 세션 및 인증 쿠키 삭제 |
+| `POST` | `/auth/touch` | 로그인 상태 확인 및 idle timer 유지 |
+
+브라우저/UI 경유 호출은 동일한 기능을 `/api/auth/config`, `/api/auth/ldap`, `/api/auth/otp`, `/api/auth/logout`, `/api/auth/touch`로 사용할 수 있습니다. `/api/auth/login`은 이전 프론트 호환용 wrapper입니다.
 
 ### 세션
 
