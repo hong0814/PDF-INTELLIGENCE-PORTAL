@@ -52,14 +52,19 @@ def create_embeddings(
         from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
 
         actual_model = model or local_model
+        from pdftablesearch.config import get_settings
+        settings = get_settings()
+        local_path = settings.local_embedding_model_path or ""
         logger.info(
-            "Creating local embedding provider: model=%s, device=%s",
+            "Creating local embedding provider: model=%s, device=%s, local_path=%s",
             actual_model,
             device,
+            local_path or "(none)",
         )
         return SentenceTransformerEmbeddings(
             model_name=actual_model,
             device=device,
+            local_model_path=local_path,
         )
 
     if provider == "remote":

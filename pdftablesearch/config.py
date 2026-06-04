@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # -- 로컬 임베딩 ---------------------------------------------------------
 
     local_embedding_model: str = "BAAI/bge-m3"
+    local_embedding_model_path: str = ""
     embedding_device: str = "cpu"
 
     # -- 처리 설정 -----------------------------------------------------------
