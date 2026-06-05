@@ -1,7 +1,10 @@
 import type {
   AuthUser,
+  AuthConfig,
   LoginRequest,
+  LoginPreAuthResponse,
   LoginResponse,
+  OtpResponse,
   UploadResponse,
   SearchResponse,
   SmartSearchResponse,
@@ -9,11 +12,14 @@ import type {
   PdfsResponse,
   UnifiedSearchResponse,
   UnifiedSource,
-  AuthConfig,
 } from '../types';
 
 export const BASE = '/api';
 export const AUTH_EXPIRED_EVENT = 'pdf-auth-expired';
+
+export function logoutUrl(): string {
+  return `${BASE}/auth/logout`;
+}
 
 interface ApiFetchOptions extends RequestInit {
   sessionId?: string;
@@ -37,7 +43,7 @@ async function readError(res: Response): Promise<string> {
   return text;
 }
 
-async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response> {
+export async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response> {
   const { sessionId, headers, ...init } = options;
   const res = await fetch(url, {
     credentials: 'include',
@@ -60,26 +66,37 @@ export async function getAuthConfig(): Promise<AuthConfig> {
   return apiJson<AuthConfig>(`${BASE}/auth/config`);
 }
 
+export async function login(body: LoginRequest): Promise<LoginPreAuthResponse> {
+  return apiJson<LoginPreAuthResponse>(`${BASE}/auth/ldap`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: body.username, password: body.password }),
+  });
+}
+
+export async function verifyOtp(preAuthToken: string, otpCode: string): Promise<OtpResponse> {
+  return apiJson<OtpResponse>(`${BASE}/auth/otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pre_auth_token: preAuthToken, otp: otpCode }),
+  });
+}
+
 export async function touchAuth(): Promise<void> {
   await apiFetch(`${BASE}/auth/touch`, { method: 'POST' });
 }
 
-export async function login(body: LoginRequest): Promise<AuthUser> {
-  const data = await apiJson<LoginResponse>(`${BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+export async function getCurrentAuth(): Promise<LoginResponse> {
+  return apiJson<LoginResponse>(`${BASE}/auth/me`);
+}
+
+export async function getCurrentUser(): Promise<AuthUser> {
+  const data = await getCurrentAuth();
   return data.user;
 }
 
 export async function logout(): Promise<void> {
-  await apiFetch(`${BASE}/auth/logout`, { method: 'POST' });
-}
-
-export async function getCurrentUser(): Promise<AuthUser> {
-  const data = await apiJson<LoginResponse>(`${BASE}/auth/me`);
-  return data.user;
+  await apiFetch(logoutUrl(), { method: 'POST' });
 }
 
 export async function createSession(name: string): Promise<{ session_id: string; name: string }> {

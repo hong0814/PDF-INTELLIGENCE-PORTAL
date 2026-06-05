@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 class PDFTableSearch:
     """
     재사용 모델과 벡터 저장소를 활용한 효율적인 PDF 표 검색 클래스.
-    
+
     ``SentenceTransformer`` 임베딩 모델을 한 번만 로드하여
     여러 검색에 재사용한다.
     """
@@ -214,7 +214,11 @@ class PDFTableSearch:
             results.append(result)
 
         # Sort by relevance score ascending (lower distance = better)
-        results.sort(key=lambda r: r.relevance_score or float("inf"))
+        results.sort(
+            key=lambda r: r.relevance_score
+            if r.relevance_score is not None
+            else float("inf")
+        )
         return results
 
     def _apply_per_doc_limit(
@@ -289,24 +293,16 @@ class PDFTableSearch:
         )
 
         try:
-            # Get all documents from the collection
-            store = vector_store.vectorstore
-            collection = store._collection
-
-            # Get all documents with metadata
-            results = collection.get(include=["documents", "metadatas"])
-
             tables = []
-            for doc_id, metadata, document in zip(
-                results["ids"],
-                results["metadatas"],
-                results["documents"]
-            ):
+            for document in vector_store.list_documents():
+                metadata = document.metadata
                 tables.append({
                     "table_id": metadata.get("table_id", "N/A"),
                     "page_number": metadata.get("page_number", 0),
                     "document_name": metadata.get("document_name", "N/A"),
-                    "content_preview": document[:200] if document else "N/A",
+                    "content_preview": document.page_content[:200]
+                    if document.page_content
+                    else "N/A",
                 })
 
             return tables

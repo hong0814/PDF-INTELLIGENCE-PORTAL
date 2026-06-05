@@ -109,8 +109,21 @@ export interface LoginRequest {
   password: string;
 }
 
-export interface LoginResponse {
+export interface AuthConfig {
+  idle_timeout_seconds: number;
+  warn_before_seconds: number;
+}
+
+export interface LoginResponse extends AuthConfig {
   user: AuthUser;
+}
+
+export interface LoginPreAuthResponse {
+  pre_auth_token: string;
+}
+
+export interface OtpResponse {
+  redirect: string;
 }
 
 export interface TableQAItem {

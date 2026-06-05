@@ -46,7 +46,7 @@ _DEFAULT_MAX_RETRIES = 3
 class LLMCache:
     """
     LLM 표 선택 응답의 디스크 기반 캐시.
-    
+
     캐시 키당 하나의 JSON 파일을 저장한다.
     """
 
@@ -170,7 +170,7 @@ class LLMSelectionResult:
 class ZaiLLMClient:
     """
     z.ai LLM 클라이언트 — 표 선택.
-    
+
     z.ai ChatOpenAI 호환 API 래퍼로 후보 표 설명을 LLM에 보내
     가장 관련성 높은 표의 구조화된 선택 결과를 받는다.
     """

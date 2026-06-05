@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { BASE } from '../api/client';
+import { BASE, apiFetch } from '../api/client';
 import DocumentViewer from './DocumentViewer';
 
 type SubTab = 'images' | 'fund';
@@ -34,7 +34,7 @@ export default function CreditReviewView() {
     setImages([]);
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${BASE}/documents/images?name=${encodeURIComponent(selectedPdf)}`,
         { headers: { 'X-Session-ID': sessionId } },
       );

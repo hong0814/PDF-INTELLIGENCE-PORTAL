@@ -79,22 +79,29 @@ class Settings(BaseSettings):
     ldap_attr_role: str = "title"
     auth_secret_key: str = "dev-secret-change-me"
     auth_token_expire_hours: int = 8
-    auth_cookie_name: str = "auth_token"
-    auth_cookie_secure: bool = False
-    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    auth_pre_auth_ttl_seconds: int = 300
+    auth_pre_auth_ttl_dev_seconds: int = 300
     auth_idle_timeout_seconds: int = 600
+    auth_idle_timeout_dev_seconds: int = 600
     auth_warn_before_seconds: int = 60
     auth_session_ttl_seconds: int = 3600
-    redis_url: str = "redis://localhost:6379/0"
+    auth_cookie_name: str = "auth_token"
+    auth_cookie_secure: bool = False
+    auth_cookie_secure_dev: bool = False
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    auth_ui_url: str = "http://localhost:8110"
 
-    # -- OTP (2단계 인증) ------------------------------------------------------
+    # -- OTP / Redis 세션 ----------------------------------------------------
+
     otp_mock_enabled: bool = False
-    auth_pre_auth_ttl_seconds: int = 300
     otp_jar_path: str = "packages/api/lib/otp-cli.jar"
     otp_sdk_path: str = ""
     otp_asstsq: str = ""
     otp_company_code: str = "tcapital"
+    otp_company_code_dev: str = "tcapital"
+    otp_company_code_prod: str = "pcapital"
     otp_timeout_seconds: int = 10
+    redis_url: str = "redis://localhost:6379/0"
 
     # -- Weaviate ------------------------------------------------------------
 

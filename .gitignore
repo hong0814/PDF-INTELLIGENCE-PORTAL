@@ -30,6 +30,10 @@ env/
 .chroma/
 ./.chroma*/
 
+# Weaviate
+db/weaviate/*
+!db/weaviate/.gitkeep
+
 # Temporary files
 *.tmp
 *.temp

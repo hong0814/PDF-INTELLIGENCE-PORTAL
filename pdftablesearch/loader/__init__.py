@@ -21,6 +21,7 @@ import fitz
 import opendataloader_pdf
 from langchain_core.documents import Document
 
+from pdftablesearch.config import get_settings
 from pdftablesearch.exceptions import PDFProcessingError, TableParsingError
 from pdftablesearch.models import ProcessingResult
 from pdftablesearch.utils import get_logger, validate_pdf_path
@@ -32,6 +33,7 @@ from pdftablesearch.loader.html_parser import (
     sanitize_table_html,
 )
 from pdftablesearch.loader.json_parser import (
+    _extract_table_entries,
     parse_json_metadata,
     reconstruct_table_markdown,
 )
@@ -50,7 +52,26 @@ logger = get_logger(__name__)
 # Re-export regex constants for backward compatibility
 import re
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
-_SEPARATOR_RE = re.compile(r"^\s*\|[-:]+\|.*\|[-:]+\|?\s*$")
+_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+
+
+def _extract_markdown_tables(markdown_content: str) -> List[str]:
+    return extract_markdown_tables(markdown_content)
+
+
+def _read_markdown_file(markdown_path: Path) -> str:
+    try:
+        return markdown_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise TableParsingError(f"Failed to read markdown file: {markdown_path}") from exc
+
+
+def _parse_json_metadata(json_path: Path) -> List[Dict[str, Any]]:
+    return parse_json_metadata(json_path)
+
+
+def _reconstruct_table_markdown(table_meta: Dict[str, Any]) -> str:
+    return reconstruct_table_markdown(table_meta)
 
 
 class PDFProcessor:
@@ -91,7 +112,8 @@ class PDFProcessor:
             }
             if use_hybrid:
                 convert_params["hybrid"] = "docling-fast"
-                convert_params["hybrid_url"] = "http://localhost:5002"
+                hybrid_port = get_settings().pdf_portal_hybrid_port
+                convert_params["hybrid_url"] = f"http://localhost:{hybrid_port}"
                 try:
                     opendataloader_pdf.convert(**convert_params)
                 except TypeError:

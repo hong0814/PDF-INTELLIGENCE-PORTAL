@@ -54,7 +54,7 @@ def search_tables(
 ) -> Union[List[TableSearchResult], MultiDocumentSearchResult]:
     """
     하나 이상의 PDF 문서에서 표를 검색한다.
-    
+
     *pdf_path*가 단일 문자열이면 단일 문서 검색,
     리스트면 다중 문서 검색을 수행한다.
     """
@@ -97,7 +97,7 @@ def _search_single(
 ) -> List[TableSearchResult]:
     """
     단일 문서 검색 파이프라인을 실행한다.
-    
+
     PDF 변환, 벡터 인덱싱, 검색, 결과 포매팅의 전체 워크플로우를 처리한다.
     """
     logger.info(
@@ -167,7 +167,7 @@ def _search_multi(
 ) -> MultiDocumentSearchResult:
     """
     다중 문서 검색 파이프라인을 실행한다.
-    
+
     각 PDF를 독립적으로 처리하고 결과를 병합한다.
     """
     logger.info(

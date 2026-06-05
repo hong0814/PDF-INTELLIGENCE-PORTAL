@@ -10,6 +10,32 @@ from pdftablesearch.utils import get_logger
 logger = get_logger(__name__)
 
 
+def _extract_table_entries(data: Any) -> List[Dict[str, Any]]:
+    """Return table entries from supported opendataloader-pdf JSON shapes."""
+    entries: List[Dict[str, Any]] = []
+
+    def add_from_kids(kids: Any) -> None:
+        if not isinstance(kids, list):
+            return
+        for entry in kids:
+            if isinstance(entry, dict) and entry.get("type") == "table":
+                entries.append(entry)
+
+    if isinstance(data, dict):
+        add_from_kids(data.get("kids"))
+        pages = data.get("pages")
+        if isinstance(pages, list):
+            for page in pages:
+                if isinstance(page, dict):
+                    add_from_kids(page.get("kids"))
+    elif isinstance(data, list):
+        for page in data:
+            if isinstance(page, dict):
+                add_from_kids(page.get("kids"))
+
+    return entries
+
+
 def parse_json_metadata(json_path: "Path") -> List[Dict[str, Any]]:
     """opendataloader-pdf JSON 출력에서 표 메타데이터를 파싱한다.
 
@@ -32,36 +58,31 @@ def parse_json_metadata(json_path: "Path") -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     table_idx = 0
 
-    if isinstance(data, dict) and "kids" in data:
-        for entry in data["kids"]:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("type") != "table":
-                continue
+    for entry in _extract_table_entries(data):
+        if table_idx == 0:
+            logger.info("First table entry keys: %s", list(entry.keys()))
 
-            if table_idx == 0:
-                logger.info("First table entry keys: %s", list(entry.keys()))
+        bbox = entry.get("bounding box", [])
+        if isinstance(bbox, list) and len(bbox) >= 4:
+            bounding_box = [
+                float(v) if isinstance(v, (int, float)) else 0.0 for v in bbox[:4]
+            ]
+        else:
+            bounding_box = [0.0, 0.0, 0.0, 0.0]
 
-            bbox = entry.get("bounding box", [])
-            if isinstance(bbox, list) and len(bbox) >= 4:
-                bounding_box = [
-                    float(v) if isinstance(v, (int, float)) else 0.0 for v in bbox[:4]
-                ]
-            else:
-                bounding_box = [0.0, 0.0, 0.0, 0.0]
+        page_num = entry.get("page number", entry.get("page_number", 1))
 
-            page_num = entry.get("page number", entry.get("page_number", 1))
-
-            result.append(
-                {
-                    "page_number": page_num,
-                    "bounding_box": bounding_box,
-                    "index": table_idx,
-                    "id": entry.get("id", table_idx),
-                    "table_data": entry,
-                }
-            )
-            table_idx += 1
+        result.append(
+            {
+                "page_number": page_num,
+                "bounding_box": bounding_box,
+                "index": table_idx,
+                "table_index": table_idx,
+                "id": entry.get("id", table_idx),
+                "table_data": entry,
+            }
+        )
+        table_idx += 1
 
     logger.info("Extracted %d tables from JSON", len(result))
     return result
@@ -69,12 +90,12 @@ def parse_json_metadata(json_path: "Path") -> List[Dict[str, Any]]:
 
 def reconstruct_table_markdown(table_meta: Dict[str, Any]) -> str:
     """JSON 셀 데이터에서 마크다운 표를 재구성한다."""
-    table_data = table_meta.get("table_data", {})
+    table_data = table_meta.get("table_data", table_meta)
     rows = table_data.get("rows", [])
     num_cols = table_data.get("num_cols", table_data.get("number of columns", 0))
 
     if not rows:
-        return "| Empty table |\n|---|"
+        return ""
 
     md_lines: List[str] = []
     for row_idx, row in enumerate(rows):

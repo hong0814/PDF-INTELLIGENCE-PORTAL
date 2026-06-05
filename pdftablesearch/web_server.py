@@ -15,7 +15,6 @@ import tempfile
 import time
 import uuid
 import asyncio
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -37,24 +36,21 @@ from starlette.responses import StreamingResponse
 from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
 from pdftablesearch.auth import (
     LDAPUser,
-    auth_config_dict,
-    call_otp_verify,
+    auth_config as auth_config_payload,
+    call_otp_subprocess,
     clear_auth_cookie,
     client_ip,
     decode_pre_auth_jwt,
-    end_auth_session,
     get_current_user,
-    issue_auth_token,
     issue_pre_auth_jwt,
     issue_session_jwt,
     ldap_client_from_settings,
     set_auth_cookie,
-    touch_auth_session,
     warn_if_insecure_auth_secret,
 )
 from pdftablesearch.config import get_settings
 from pdftablesearch.session_store import (
-    delete_session,
+    delete_session as delete_auth_session,
     read_session,
     write_session,
 )
@@ -473,9 +469,14 @@ class ConfirmGroupRequest(BaseModel):
     rejected: list[dict]
 
 
-@app.post("/api/auth/login")
-async def login(body: LoginRequest) -> JSONResponse:
-    return await ldap_auth(LDAPAuthRequest(id=body.username, password=body.password))
+@app.get("/auth/config")
+async def auth_config_endpoint() -> JSONResponse:
+    return JSONResponse(content=auth_config_payload())
+
+
+@app.get("/api/auth/config")
+async def api_auth_config_endpoint() -> JSONResponse:
+    return await auth_config_endpoint()
 
 
 @app.post("/auth/ldap")
@@ -483,9 +484,18 @@ async def ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
     client = ldap_client_from_settings()
     user = client.authenticate(body.id, body.password)
     if user is None:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = issue_pre_auth_jwt(user)
-    return JSONResponse(content={"pre_auth_token": token, "user": user.model_dump()})
+        raise HTTPException(status_code=401, detail="invalid_credentials")
+    return JSONResponse(content={"pre_auth_token": issue_pre_auth_jwt(user)})
+
+
+@app.post("/api/auth/ldap")
+async def api_ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
+    return await ldap_auth(body)
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest) -> JSONResponse:
+    return await ldap_auth(LDAPAuthRequest(id=body.username, password=body.password))
 
 
 @app.post("/auth/otp")
@@ -494,7 +504,7 @@ async def otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
     if user_data is None:
         raise HTTPException(status_code=401, detail="session_expired")
 
-    result = await call_otp_verify(
+    result = await call_otp_subprocess(
         user_id=str(user_data["user_id"]),
         otp=body.otp,
         client_ip_str=client_ip(request),
@@ -502,21 +512,16 @@ async def otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
     if result == "6000":
         raise HTTPException(status_code=401, detail="otp_failed")
     if result != "0":
-        raise HTTPException(status_code=503, detail="otp_system_error")
+        raise HTTPException(status_code=500, detail="otp_system_error")
 
     token, ttl_seconds, jti = issue_session_jwt(user_data)
     stored = await write_session(token, {**user_data, "jti": jti}, ttl_seconds)
     if not stored:
         raise HTTPException(status_code=503, detail="session_store_unavailable")
 
-    response = JSONResponse(content={"user": user_data})
+    response = JSONResponse(content={"redirect": get_settings().auth_ui_url})
     set_auth_cookie(response, token, ttl_seconds)
     return response
-
-
-@app.post("/api/auth/ldap")
-async def api_ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
-    return await ldap_auth(body)
 
 
 @app.post("/api/auth/otp")
@@ -524,29 +529,86 @@ async def api_otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
     return await otp(body, request)
 
 
-@app.post("/api/auth/logout")
-async def logout(request: Request, response: Response) -> JSONResponse:
-    end_auth_session(request)
+@app.post("/auth/logout")
+async def logout(request: Request) -> JSONResponse:
+    token = request.cookies.get(get_settings().auth_cookie_name)
+    if token:
+        await delete_auth_session(token)
+    response = JSONResponse(content={"ok": True})
     clear_auth_cookie(response)
-    return JSONResponse(content={"ok": True})
+    return response
 
 
-@app.get("/api/auth/config")
-async def auth_config() -> JSONResponse:
-    return JSONResponse(content=auth_config_dict())
+@app.post("/api/auth/logout")
+async def api_logout(request: Request) -> JSONResponse:
+    return await logout(request)
 
 
-@app.post("/api/auth/touch")
-async def auth_touch(request: Request, response: Response) -> JSONResponse:
-    if not touch_auth_session(request):
-        clear_auth_cookie(response)
-        return JSONResponse(status_code=401, content={"detail": "Session expired"})
-    return JSONResponse(content={"ok": True, **auth_config_dict()})
+@app.get("/auth/logout")
+async def logout_redirect(request: Request) -> Response:
+    token = request.cookies.get(get_settings().auth_cookie_name)
+    if token:
+        await delete_auth_session(token)
+    response = Response(status_code=302)
+    response.headers["Location"] = f"{get_settings().auth_ui_url}/login"
+    clear_auth_cookie(response)
+    return response
+
+
+@app.get("/api/auth/logout")
+async def api_logout_redirect(request: Request) -> Response:
+    return await logout_redirect(request)
+
+
+@app.get("/auth/verify")
+async def verify_token(request: Request) -> JSONResponse:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_token")
+    token = auth_header[7:]
+    claims = await read_session(token)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="invalid_token")
+    return JSONResponse(content=claims)
+
+
+@app.get("/api/auth/verify")
+async def api_verify_token(request: Request) -> JSONResponse:
+    return await verify_token(request)
+
+
+@app.delete("/auth/session")
+async def delete_token(request: Request) -> JSONResponse:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_token")
+    await delete_auth_session(auth_header[7:])
+    return JSONResponse(content={"deleted": True})
+
+
+@app.delete("/api/auth/session")
+async def api_delete_token(request: Request) -> JSONResponse:
+    return await delete_token(request)
+
+
+@app.get("/auth/me")
+async def me(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return JSONResponse(content={"user": current_user.model_dump(), **auth_config_payload()})
 
 
 @app.get("/api/auth/me")
-async def me(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
-    return JSONResponse(content={"user": current_user.model_dump()})
+async def api_me(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return await me(current_user)
+
+
+@app.post("/auth/touch")
+async def touch(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return JSONResponse(content={"ok": True, "user": current_user.model_dump(), **auth_config_payload()})
+
+
+@app.post("/api/auth/touch")
+async def api_touch(current_user: LDAPUser = Depends(get_current_user)) -> JSONResponse:
+    return await touch(current_user)
 
 
 @app.post("/api/confirm-table-groups")

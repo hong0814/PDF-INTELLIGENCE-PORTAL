@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAppStore, type HighlightRegion } from '../store/useAppStore';
-import { BASE } from '../api/client';
+import { BASE, apiFetch } from '../api/client';
 import { drawPIIMasks } from '../utils/piiDetection';
 
 declare global { var pdfjsLib: any; }
@@ -108,7 +108,7 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
 
   const reloadOverlays = useCallback(async (viewport: any) => {
     if (!selectedPdf) return;
-    const res = await fetch(`${BASE}/documents/tables?name=${encodeURIComponent(selectedPdf)}&session_id=${encodeURIComponent(sessionId)}`);
+    const res = await apiFetch(`${BASE}/documents/tables?name=${encodeURIComponent(selectedPdf)}&session_id=${encodeURIComponent(sessionId)}`);
     const data = await res.json();
     const newOverlays: TableOverlay[] = (data.tables || []).map((t: any) => {
       const bbox = t.bounding_box || [0, 0, 0, 0];

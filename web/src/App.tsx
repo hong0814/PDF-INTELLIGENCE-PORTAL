@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { TableGroupSuggestion, AuthConfig } from './types';
+import type { AuthConfig, AuthUser, LoginPreAuthResponse, TableGroupSuggestion } from './types';
 import * as api from './api/client';
 import { useAppStore } from './store/useAppStore';
 import Sidebar from './components/Sidebar';
@@ -12,10 +12,11 @@ import UnifiedSearchView from './components/UnifiedSearchView';
 import TranslationView from './components/TranslationView';
 import TableGroupSuggestionPopup from './components/TableGroupSuggestionPopup';
 import LoginView from './components/LoginView';
-import SessionTimeoutGuard from './components/SessionTimeoutGuard';
+import OtpOverlay from './components/OtpOverlay';
 import AgreementOverlay from './components/AgreementOverlay';
+import SessionTimeoutGuard from './components/SessionTimeoutGuard';
 
-const AGREEMENT_KEY = 'pdf_portal_agreement_accepted';
+const AGREEMENT_ACCEPTED_KEY = 'pdf_portal_agreement_accepted';
 
 export default function App() {
   const user = useAppStore((s) => s.user);
@@ -39,24 +40,33 @@ export default function App() {
   const prevSessionIdRef = useRef(sessionId);
 
   const [tableGroupSuggestions, setTableGroupSuggestions] = useState<TableGroupSuggestion[]>([]);
-  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
-  const [showAgreement, setShowAgreement] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpSubmitting, setOtpSubmitting] = useState(false);
+  const [preAuth, setPreAuth] = useState<LoginPreAuthResponse | null>(null);
+  const [pendingOtpUsername, setPendingOtpUsername] = useState('');
+  const [pendingUser, setPendingUser] = useState<AuthUser | null>(null);
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setAuthLoading(true);
-    api.getCurrentUser().then((nextUser) => {
+    api.getAuthConfig().then((config) => {
+      if (cancelled) return null;
+      setAuthConfig(config);
+      return api.getCurrentAuth();
+    }).then((status) => {
+      if (cancelled || status === null) return;
+      const nextUser = status.user;
+      setAuthConfig(status);
       if (cancelled) return;
-      setUser(nextUser);
-      setLoginError(null);
-      api.getAuthConfig().then((cfg) => {
-        if (!cancelled) setAuthConfig(cfg);
-      }).catch(() => {});
-      if (sessionStorage.getItem(AGREEMENT_KEY) !== '1') {
-        setShowAgreement(true);
+      if (sessionStorage.getItem(AGREEMENT_ACCEPTED_KEY) === '1') {
+        setUser(nextUser);
+      } else {
+        setPendingUser(nextUser);
       }
+      setLoginError(null);
     }).catch(() => {
       if (cancelled) return;
       clearAuth();
@@ -70,33 +80,66 @@ export default function App() {
   const handleLogin = useCallback(async (username: string, password: string) => {
     setLoginSubmitting(true);
     setLoginError(null);
+    setOtpError(null);
     try {
-      const nextUser = await api.login({ username, password });
-      setUser(nextUser);
-      try {
-        const cfg = await api.getAuthConfig();
-        setAuthConfig(cfg);
-      } catch { }
-      if (sessionStorage.getItem(AGREEMENT_KEY) !== '1') {
-        setShowAgreement(true);
-      }
+      const nextPreAuth = await api.login({ username, password });
+      setPreAuth(nextPreAuth);
+      setPendingOtpUsername(username);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '로그인에 실패했습니다.');
     } finally {
       setLoginSubmitting(false);
       setAuthLoading(false);
     }
-  }, [setAuthLoading, setUser]);
+  }, [setAuthLoading]);
+
+  const handleOtpSubmit = useCallback(async (otpCode: string) => {
+    if (!preAuth) throw new Error('OTP 세션이 없습니다.');
+    setOtpSubmitting(true);
+    setOtpError(null);
+    try {
+      await api.verifyOtp(preAuth.pre_auth_token, otpCode);
+      const status = await api.getCurrentAuth();
+      setAuthConfig(status);
+      setPendingUser(status.user);
+      setPreAuth(null);
+      setPendingOtpUsername('');
+    } catch (error) {
+      setOtpError(error instanceof Error ? error.message : 'OTP 인증에 실패했습니다.');
+      throw error;
+    } finally {
+      setOtpSubmitting(false);
+    }
+  }, [preAuth]);
+
+  const handleAuthExpired = useCallback(() => {
+    sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
+    setPreAuth(null);
+    setPendingOtpUsername('');
+    setPendingUser(null);
+    clearAuth();
+  }, [clearAuth]);
+
+  const handleAgreementConfirm = useCallback(() => {
+    if (!pendingUser) return;
+    sessionStorage.setItem(AGREEMENT_ACCEPTED_KEY, '1');
+    setUser(pendingUser);
+    setPendingUser(null);
+  }, [pendingUser, setUser]);
+
+  const handleAgreementCancel = useCallback(() => {
+    setPendingUser(null);
+    sessionStorage.removeItem(AGREEMENT_ACCEPTED_KEY);
+    void api.logout().finally(handleAuthExpired);
+  }, [handleAuthExpired]);
 
   const handleLogout = useCallback(async () => {
     try {
       await api.logout();
     } finally {
-      clearAuth();
-      setAuthConfig(null);
-      sessionStorage.removeItem(AGREEMENT_KEY);
+      handleAuthExpired();
     }
-  }, [clearAuth]);
+  }, [handleAuthExpired]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('새 세션 이름을 입력하세요') || '새 세션';
@@ -232,11 +275,28 @@ export default function App() {
 
   if (!user) {
     return (
-      <LoginView
-        error={loginError}
-        isSubmitting={loginSubmitting}
-        onSubmit={handleLogin}
-      />
+      <>
+        <LoginView
+          error={loginError}
+          isSubmitting={loginSubmitting}
+          onSubmit={handleLogin}
+        />
+        {preAuth && (
+          <OtpOverlay
+            accountLabel={pendingOtpUsername}
+            isSubmitting={otpSubmitting}
+            error={otpError}
+            onCancel={() => { setPreAuth(null); setPendingOtpUsername(''); setOtpError(null); }}
+            onSubmit={handleOtpSubmit}
+          />
+        )}
+        {pendingUser && (
+          <AgreementOverlay
+            onCancel={handleAgreementCancel}
+            onConfirm={handleAgreementConfirm}
+          />
+        )}
+      </>
     );
   }
 
@@ -265,6 +325,9 @@ export default function App() {
         >
           새 세션 시작하기
         </button>
+        {authConfig && (
+          <SessionTimeoutGuard config={authConfig} onExpired={handleAuthExpired} />
+        )}
       </div>
     );
   }
@@ -314,17 +377,8 @@ export default function App() {
           onComplete={() => { setTableGroupSuggestions([]); useAppStore.getState().bumpOverlayVersion(); }}
         />
       )}
-      {user && authConfig?.enabled && !showAgreement && (
-        <SessionTimeoutGuard config={authConfig} onExpired={handleLogout} />
-      )}
-      {user && showAgreement && (
-        <AgreementOverlay
-          onConfirm={() => {
-            sessionStorage.setItem(AGREEMENT_KEY, '1');
-            setShowAgreement(false);
-          }}
-          onCancel={() => { void handleLogout(); }}
-        />
+      {authConfig && (
+        <SessionTimeoutGuard config={authConfig} onExpired={handleAuthExpired} />
       )}
     </div>
   );

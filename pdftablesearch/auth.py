@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import logging
 import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import jwt
 import ldap3
@@ -20,69 +19,15 @@ from ldap3.utils.conv import escape_filter_chars
 from pydantic import BaseModel, Field
 
 from pdftablesearch.config import get_settings
-from pdftablesearch.session_store import (
-    delete_session,
-    read_session,
-    write_session,
-)
+from pdftablesearch.session_store import read_session
 
 logger = logging.getLogger(__name__)
 
 _INSECURE_DEFAULT_SECRET = "dev-secret-change-me"
-
 _DEFAULT_OTP_JAR_PATH = "packages/api/lib/otp-cli.jar"
+_DEFAULT_OTP_SDK_JAR_NAME = "certifyOtp.jar"
 _OTP_MAIN_CLASS = "OtpCli"
 _OTP_KILL_WAIT_SECONDS = 1
-
-
-# ---------------------------------------------------------------------------
-# Idle timeout helpers (Redis-backed)
-# ---------------------------------------------------------------------------
-
-async def _is_session_active(token: str, jti: str) -> bool:
-    """Check whether a session token is still valid in Redis (not idle-expired)."""
-    claims = await read_session(token)
-    if claims is None:
-        return False
-    stored_jti = claims.get("jti", "")
-    if stored_jti != jti:
-        return False
-    return True
-
-
-async def _touch_session(token: str, jti: str) -> bool:
-    """Ping Redis to extend idle timeout without changing token TTL."""
-    claims = await read_session(token)
-    if claims is None:
-        return False
-    stored_jti = claims.get("jti", "")
-    if stored_jti != jti:
-        return False
-    settings = get_settings()
-    remaining_ttl = max(1, settings.auth_session_ttl_seconds)
-    try:
-        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
-    except Exception:
-        return False
-    return await write_session(token, {**claims, "jti": jti}, remaining_ttl)
-
-
-async def _end_session(token: str) -> None:
-    """Remove session token from Redis."""
-    await delete_session(token)
-
-
-
-
-def auth_config_dict() -> dict[str, Any]:
-    settings = get_settings()
-    enabled = bool(settings.ldap_server_url)
-    return {
-        "enabled": enabled,
-        "idle_timeout_seconds": settings.auth_idle_timeout_seconds,
-        "warn_before_seconds": settings.auth_warn_before_seconds,
-        "session_ttl_seconds": settings.auth_session_ttl_seconds,
-    }
 
 
 class LDAPUser(BaseModel):
@@ -239,13 +184,13 @@ def ldap_client_from_settings() -> LDAPClient:
     )
 
 
-# ---------------------------------------------------------------------------
-# JWT encode/decode helpers
-# ---------------------------------------------------------------------------
-
 def _secret() -> str:
     settings = get_settings()
-    return os.getenv("AUTH_SECRET_KEY") or settings.auth_secret_key
+    return (
+        os.getenv("AUTH_SECRET_KEY")
+        or os.getenv("CHAINLIT_AUTH_SECRET")
+        or settings.auth_secret_key
+    )
 
 
 def _issue(payload: dict[str, Any], ttl_seconds: int) -> str:
@@ -263,14 +208,25 @@ def _decode(token: str) -> dict[str, Any] | None:
         return None
 
 
-def issue_pre_auth_jwt(user: LDAPUser | dict[str, Any]) -> str:
+def _pre_auth_ttl() -> int:
     settings = get_settings()
+    is_dev = settings.app_env.lower() == "dev"
+    value = (
+        settings.auth_pre_auth_ttl_dev_seconds
+        if is_dev
+        else settings.auth_pre_auth_ttl_seconds
+    )
+    return value if value > 0 else 300
+
+
+def issue_pre_auth_jwt(user: LDAPUser | dict[str, Any]) -> str:
+    """Issue a short-lived JWT after LDAP succeeds, before OTP verification."""
     user_data = user.model_dump() if isinstance(user, LDAPUser) else user
-    ttl = settings.auth_pre_auth_ttl_seconds
-    return _issue({"sub": "pre_auth", "jti": uuid.uuid4().hex, **user_data}, ttl)
+    return _issue({"sub": "pre_auth", "jti": uuid.uuid4().hex, **user_data}, _pre_auth_ttl())
 
 
 def decode_pre_auth_jwt(token: str) -> dict[str, Any] | None:
+    """Return user claims from a valid pre-auth JWT."""
     payload = _decode(token)
     if not payload or payload.get("sub") != "pre_auth":
         return None
@@ -282,6 +238,7 @@ def decode_pre_auth_jwt(token: str) -> dict[str, Any] | None:
 
 
 def issue_session_jwt(user: LDAPUser | dict[str, Any]) -> tuple[str, int, str]:
+    """Issue a signed session JWT and return ``(token, ttl_seconds, jti)``."""
     settings = get_settings()
     user_data = user.model_dump() if isinstance(user, LDAPUser) else user
     ttl_seconds = max(1, settings.auth_token_expire_hours) * 3600
@@ -290,34 +247,129 @@ def issue_session_jwt(user: LDAPUser | dict[str, Any]) -> tuple[str, int, str]:
     return token, ttl_seconds, jti
 
 
-async def issue_auth_token(user: LDAPUser) -> tuple[str, int]:
-    token, ttl_seconds, jti = issue_session_jwt(user)
-    await write_session(token, {**user.model_dump(), "jti": jti}, ttl_seconds)
+def issue_auth_token(user: LDAPUser) -> tuple[str, int]:
+    """Compatibility wrapper returning ``(token, ttl_seconds)``."""
+    token, ttl_seconds, _ = issue_session_jwt(user)
     return token, ttl_seconds
 
 
-async def decode_auth_token(token: str) -> LDAPUser | None:
+def auth_config() -> dict[str, int]:
+    """Return public browser-side auth timing configuration."""
     settings = get_settings()
+    idle_timeout = (
+        settings.auth_idle_timeout_dev_seconds
+        if settings.app_env.lower() == "dev"
+        else settings.auth_idle_timeout_seconds
+    )
+    if idle_timeout <= 0:
+        idle_timeout = 600
+    warn_before = settings.auth_warn_before_seconds if settings.auth_warn_before_seconds > 0 else 30
+    return {
+        "idle_timeout_seconds": idle_timeout,
+        "warn_before_seconds": warn_before,
+    }
+
+
+def client_ip(request: Request) -> str:
+    """Extract client IP in the same way as analytics_agent."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "127.0.0.1"
+
+
+def _build_otp_command(
+    company_code: str,
+    user_id: str,
+    otp: str,
+    asstsq: str,
+    client_ip_str: str,
+) -> list[str]:
+    settings = get_settings()
+    jar_path = str(settings.otp_jar_path or _DEFAULT_OTP_JAR_PATH)
+    sdk_path = str(settings.otp_sdk_path or Path(jar_path).with_name(_DEFAULT_OTP_SDK_JAR_NAME))
+    if Path(sdk_path).expanduser().exists():
+        classpath = os.pathsep.join([jar_path, sdk_path])
+        return ["java", "-cp", classpath, _OTP_MAIN_CLASS, company_code, user_id, otp, asstsq, client_ip_str]
+    return ["java", "-jar", jar_path, company_code, user_id, otp, asstsq, client_ip_str]
+
+
+async def _kill_subprocess(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(proc.wait(), timeout=_OTP_KILL_WAIT_SECONDS)
+
+
+async def call_otp_subprocess(user_id: str, otp: str, client_ip_str: str) -> str:
+    """Call the Java OTP CLI and return its result code.
+
+    The expected stdout contract matches analytics_agent: ``"0"`` means
+    success, ``"6000"`` means failed OTP, and every system problem returns
+    ``"error"``.
+    """
+    settings = get_settings()
+    company_code = (
+        settings.otp_company_code_dev
+        if settings.app_env.lower() == "dev"
+        else settings.otp_company_code_prod
+    )
+    cmd = _build_otp_command(
+        company_code=company_code,
+        user_id=user_id,
+        otp=otp,
+        asstsq=settings.otp_asstsq,
+        client_ip_str=client_ip_str,
+    )
+    proc: asyncio.subprocess.Process | None = None
     try:
-        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
-        return None
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=max(1, settings.otp_timeout_seconds),
+        )
+        if proc.returncode != 0:
+            return "error"
+        return stdout.decode().strip()
+    except TimeoutError:
+        if proc is not None:
+            await _kill_subprocess(proc)
+        return "error"
+    except Exception:
+        if proc is not None:
+            await _kill_subprocess(proc)
+        return "error"
 
-    if await read_session(token) is None:
+
+def decode_session_claims(token: str) -> dict[str, Any] | None:
+    """Validate JWT signature/expiry and return session claims."""
+    payload = _decode(token)
+    if not payload or payload.get("sub") != "session":
         return None
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"sub", "iat", "exp"}
+    }
 
-    jti = payload.get("jti", "")
-    if not await _is_session_active(token, jti):
+
+def decode_auth_token(token: str) -> LDAPUser | None:
+    """Validate and decode a session token without checking Redis."""
+    payload = decode_session_claims(token)
+    if payload is None:
         return None
-
-    await _touch_session(token, jti)
-
     claims = {
         key: value
         for key, value in payload.items()
-        if key not in {"sub", "iat", "exp", "jti"}
+        if key != "jti"
     }
     try:
         return LDAPUser.model_validate(claims)
@@ -328,23 +380,39 @@ async def decode_auth_token(token: str) -> LDAPUser | None:
 def set_auth_cookie(response: Response, token: str, ttl_seconds: int) -> None:
     """Persist the auth token in an httpOnly cookie."""
     settings = get_settings()
+    secure = settings.auth_cookie_secure_dev if settings.app_env.lower() == "dev" else settings.auth_cookie_secure
     response.set_cookie(
         key=settings.auth_cookie_name,
         value=token,
         max_age=ttl_seconds,
         httponly=True,
-        secure=settings.auth_cookie_secure,
+        secure=secure,
+        samesite=settings.auth_cookie_samesite,
+        path="/",
+    )
+    response.set_cookie(
+        key="auth_presence",
+        value="1",
+        httponly=False,
+        secure=secure,
         samesite=settings.auth_cookie_samesite,
         path="/",
     )
 
 
 def clear_auth_cookie(response: Response) -> None:
-    """Delete the auth cookie."""
+    """Delete auth cookies."""
     settings = get_settings()
+    secure = settings.auth_cookie_secure_dev if settings.app_env.lower() == "dev" else settings.auth_cookie_secure
     response.delete_cookie(
         key=settings.auth_cookie_name,
-        secure=settings.auth_cookie_secure,
+        secure=secure,
+        samesite=settings.auth_cookie_samesite,
+        path="/",
+    )
+    response.delete_cookie(
+        key="auth_presence",
+        secure=secure,
         samesite=settings.auth_cookie_samesite,
         path="/",
     )
@@ -361,80 +429,21 @@ async def get_current_user(
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    user = await decode_auth_token(token)
-    if user is None:
+    token_claims = decode_session_claims(token)
+    if token_claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
-    return user
 
-
-async def touch_auth_session(request: Request) -> bool:
-    settings = get_settings()
-    token = request.cookies.get(settings.auth_cookie_name)
-    if not token:
-        return False
+    claims = await read_session(token)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    if claims.get("jti") != token_claims.get("jti"):
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
     try:
-        payload = jwt.decode(token, settings.auth_secret_key, algorithms=["HS256"])
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-        return False
-    jti = payload.get("jti", "")
-    if not await _is_session_active(token, jti):
-        return False
-    return await _touch_session(token, jti)
-
-
-async def end_auth_session(request: Request) -> None:
-    settings = get_settings()
-    token = request.cookies.get(settings.auth_cookie_name)
-    if not token:
-        return
-    await _end_session(token)
-
-
-# ---------------------------------------------------------------------------
-# OTP helpers
-# ---------------------------------------------------------------------------
-
-def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "127.0.0.1"
-
-
-async def call_otp_verify(user_id: str, otp: str, client_ip_str: str) -> str:
-    settings = get_settings()
-    if settings.app_env.lower() in ("dev", "local", "test") and settings.otp_mock_enabled:
-        logger.info("OTP mock enabled: skipping Java OTP for user=%s", user_id)
-        return "0"
-
-    cmd = ["java", "-jar", str(settings.otp_jar_path), settings.otp_company_code, user_id, otp, settings.otp_asstsq, client_ip_str]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=settings.otp_timeout_seconds)
-        if proc.returncode != 0:
-            return "error"
-        return stdout.decode().strip()
-    except asyncio.TimeoutError:
-        await _kill_subprocess(proc)
-        return "error"
+        return LDAPUser.model_validate(
+            {k: v for k, v in claims.items() if k not in {"jti", "_ttl"}}
+        )
     except Exception:
-        await _kill_subprocess(proc)
-        return "error"
-
-
-async def _kill_subprocess(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
-        return
-    with contextlib.suppress(ProcessLookupError):
-        proc.kill()
-    with contextlib.suppress(Exception):
-        await asyncio.wait_for(proc.wait(), timeout=_OTP_KILL_WAIT_SECONDS)
+        raise HTTPException(status_code=401, detail="Invalid session data") from None
 
 
 def warn_if_insecure_auth_secret() -> None:

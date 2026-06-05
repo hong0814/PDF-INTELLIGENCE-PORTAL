@@ -10,7 +10,7 @@ from pdftablesearch.utils import get_logger
 logger = get_logger(__name__)
 
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
-_SEPARATOR_RE = re.compile(r"^\s*\|[-:]+\|.*\|[-:]+\|?\s*$")
+_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
 
 
 def extract_markdown_tables(markdown_content: str) -> List[str]:

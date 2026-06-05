@@ -14,9 +14,9 @@ class TestLdapServerConstants:
         assert ldap_server.DEFAULT_LDAP_PORT == 3890
         assert ldap_server.RUN_DIR_PREFIX == Path("/tmp/pdf-intelligence-portal-ldap")
         assert ldap_server.RUN_DIR == Path("/tmp/pdf-intelligence-portal-ldap-3890")
-        assert ldap_server.ROOT_DN == "CN=admin,DC=hc,DC=com"
-        assert ldap_server.ROOT_PASSWORD == "secret"
-        assert ldap_server.BASE_DN == "OU=YourCompany,DC=hc,DC=com"
+        assert ldap_server.ROOT_DN == "cn=admin,dc=pdfportal,dc=local"
+        assert ldap_server.ROOT_PASSWORD == "admin"
+        assert ldap_server.BASE_DN == "dc=pdfportal,dc=local"
 
     def test_script_paths_are_repo_local(self) -> None:
         assert ldap_server.SCRIPTS_DIR == Path(__file__).resolve().parents[1] / "scripts" / "ldap"

@@ -85,8 +85,8 @@ ZAI_LLM_MODEL=gpt-oss:120b
 # LDAP
 LDAP_SERVER_URL=ldap://localhost:3890
 LDAP_BASE_DN=dc=pdfportal,dc=local
-LDAP_BIND_DN=cn=admin,dc=pdfportal,dc=local
-LDAP_BIND_PASSWORD=admin
+LDAP_SERVICE_BIND_DN=cn=admin,dc=pdfportal,dc=local
+LDAP_SERVICE_BIND_PASSWORD=admin
 
 # Weaviate
 WEAVIATE_HOST=localhost
@@ -95,7 +95,19 @@ WEAVIATE_GRPC_PORT=50050
 VECTOR_BACKEND=weaviate
 
 # Auth
-JWT_SECRET=dev-secret-change-me
+AUTH_SECRET_KEY=dev-secret-change-me
+AUTH_TOKEN_EXPIRE_HOURS=8
+AUTH_PRE_AUTH_TTL_SECONDS=300
+AUTH_IDLE_TIMEOUT_SECONDS=600
+AUTH_WARN_BEFORE_SECONDS=60
+REDIS_URL=redis://localhost:6379/0
+
+# OTP subprocess
+OTP_JAR_PATH=packages/api/lib/otp-cli.jar
+OTP_SDK_PATH=
+OTP_ASSTSQ=
+OTP_COMPANY_CODE_DEV=tcapital
+OTP_COMPANY_CODE_PROD=pcapital
 
 # CORS
 CORS_ORIGINS=http://localhost:8000,http://localhost:5173
@@ -104,10 +116,13 @@ EOF
 # 4. LDAP 서버 시작 (선택)
 bash scripts/ldap/start.sh
 
-# 5. 하이브리드 변환 서버 시작
+# 5. Redis 시작
+redis-server --port 6379
+
+# 6. 하이브리드 변환 서버 시작
 opendataloader-pdf-hybrid --port 5002 &
 
-# 6. 프론트엔드 빌드
+# 7. 프론트엔드 빌드
 cd web && npm install && npm run build && cd ..
 
 # 7. FastAPI 서버 실행
@@ -141,9 +156,9 @@ open http://localhost:8000
 |------|--------|------|
 | `LDAP_SERVER_URL` | `ldap://localhost:3890` | LDAP 서버 URL |
 | `LDAP_BASE_DN` | `dc=pdfportal,dc=local` | 검색 Base DN |
-| `LDAP_BIND_DN` | `cn=admin,dc=pdfportal,dc=local` | 관리자 바인드 DN |
-| `LDAP_BIND_PASSWORD` | `admin` | 관리자 비밀번호 |
-| `LDAP_USE_SSL` | `false` | SSL 사용 여부 |
+| `LDAP_SERVICE_BIND_DN` | `cn=admin,dc=pdfportal,dc=local` | 관리자 바인드 DN |
+| `LDAP_SERVICE_BIND_PASSWORD` | `admin` | 관리자 비밀번호 |
+| `LDAP_USE_TLS` | `false` | TLS 사용 여부 |
 
 ### Weaviate
 
@@ -159,8 +174,18 @@ open http://localhost:8000
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `JWT_SECRET` | `dev-secret-change-me` | JWT 서명 시크릿 |
-| `AUTH_ENABLED` | `true` | 인증 활성화 여부 |
+| `AUTH_SECRET_KEY` | `dev-secret-change-me` | JWT 서명 시크릿 |
+| `AUTH_TOKEN_EXPIRE_HOURS` | `8` | OTP 성공 후 발급되는 로그인 JWT 유효 시간 |
+| `AUTH_PRE_AUTH_TTL_SECONDS` | `300` | LDAP 성공 후 OTP 입력까지 허용되는 시간 |
+| `AUTH_IDLE_TIMEOUT_SECONDS` | `600` | 브라우저 idle logout 기준 시간 |
+| `AUTH_WARN_BEFORE_SECONDS` | `60` | 세션 만료 경고 표시 시작 시간 |
+| `REDIS_URL` | `redis://localhost:6379/0` | 로그인 세션 저장소 |
+| `OTP_JAR_PATH` | `packages/api/lib/otp-cli.jar` | OTP Java CLI JAR 경로 |
+| `OTP_SDK_PATH` | 빈 값 | OTP SDK JAR 경로, 없으면 `OTP_JAR_PATH`의 형제 `certifyOtp.jar` 사용 |
+| `OTP_COMPANY_CODE_DEV` | `tcapital` | 개발 환경 OTP 회사 코드 |
+| `OTP_COMPANY_CODE_PROD` | `pcapital` | 운영 환경 OTP 회사 코드 |
+
+로그인 흐름은 `ID/PW LDAP 인증 -> OTP 인증 -> Redis 세션 저장 -> 서비스 이용 동의 -> 앱 진입` 순서입니다. API 내부 기준 라우트는 `/auth/ldap`, `/auth/otp`입니다. React 브라우저 호출은 같은-origin API prefix를 통해 `/api/auth/ldap`, `/api/auth/otp`로 들어오며, 백엔드는 이를 내부 `/auth/*` 처리와 같은 로직으로 넘깁니다. `/auth/otp`는 OTP Java subprocess 결과가 `0`일 때만 Redis에 세션을 저장하고, `auth_token` httpOnly 쿠키와 `auth_presence` 쿠키를 발급합니다.
 
 ---
 
@@ -226,8 +251,16 @@ pdftablesearch/
 
 | Method | Path | 설명 |
 |--------|------|------|
-| `POST` | `/api/auth/login` | LDAP 로그인 → JWT 쿠키 발급 |
-| `POST` | `/api/auth/logout` | 쿠키 삭제 |
+| `GET` | `/auth/config` | OTP/idle timeout 설정 조회 |
+| `POST` | `/auth/ldap` | LDAP 로그인 → OTP pre-auth JWT 발급 |
+| `POST` | `/auth/otp` | OTP subprocess 검증 → Redis 세션 저장 → 쿠키 발급 |
+| `GET` | `/auth/verify` | Bearer token Redis 세션 검증 |
+| `DELETE` | `/auth/session` | Bearer token Redis 세션 삭제 |
+| `POST` | `/auth/logout` | Redis 세션 및 인증 쿠키 삭제 |
+| `GET` | `/auth/logout` | Redis 세션 및 인증 쿠키 삭제 후 로그인 페이지로 302 redirect |
+| `POST` | `/auth/touch` | 로그인 상태 확인 및 idle timer 유지 |
+
+브라우저/UI 경유 호출은 동일한 기능을 `/api/auth/config`, `/api/auth/ldap`, `/api/auth/otp`, `/api/auth/logout`, `/api/auth/touch`로 사용할 수 있습니다. idle timeout 만료 시 브라우저는 `GET /api/auth/logout`으로 이동해 쿠키 삭제와 로그인 페이지 redirect 흐름을 탑니다. `/api/auth/login`은 이전 프론트 호환용 wrapper입니다.
 
 ### 세션
 
