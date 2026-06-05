@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { BASE } from '../api/client';
 import DocumentViewer from './DocumentViewer';
@@ -49,6 +49,13 @@ export default function CreditReviewView() {
       setIsLoading(false);
     }
   }, [selectedPdf, sessionId]);
+
+  useEffect(() => {
+    if (selectedPdf && !pdfs.find(p => p.name === selectedPdf)) {
+      setSelectedPdf('');
+      setImages([]);
+    }
+  }, [pdfs, selectedPdf]);
 
   if (pdfs.length === 0) {
     return (

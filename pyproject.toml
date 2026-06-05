@@ -17,6 +17,7 @@ dependencies = [
     "langchain-openai>=0.0.5",
     "langchain-text-splitters>=0.0.1",
     "opendataloader-pdf[hybrid]>=2.2.1",
+    "redis>=5.0.0",
     "requests>=2.31.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.0.0",

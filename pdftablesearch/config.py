@@ -85,6 +85,16 @@ class Settings(BaseSettings):
     auth_idle_timeout_seconds: int = 600
     auth_warn_before_seconds: int = 60
     auth_session_ttl_seconds: int = 3600
+    redis_url: str = "redis://localhost:6379/0"
+
+    # -- OTP (2단계 인증) ------------------------------------------------------
+    otp_mock_enabled: bool = False
+    auth_pre_auth_ttl_seconds: int = 300
+    otp_jar_path: str = "packages/api/lib/otp-cli.jar"
+    otp_sdk_path: str = ""
+    otp_asstsq: str = ""
+    otp_company_code: str = "tcapital"
+    otp_timeout_seconds: int = 10
 
     # -- Weaviate ------------------------------------------------------------
 

@@ -34,16 +34,26 @@ from pdftablesearch import PDFProcessor, PDFTableSearch, smart_search
 from pdftablesearch.auth import (
     LDAPUser,
     auth_config_dict,
+    call_otp_verify,
     clear_auth_cookie,
+    client_ip,
+    decode_pre_auth_jwt,
     end_auth_session,
     get_current_user,
     issue_auth_token,
+    issue_pre_auth_jwt,
+    issue_session_jwt,
     ldap_client_from_settings,
     set_auth_cookie,
     touch_auth_session,
     warn_if_insecure_auth_secret,
 )
 from pdftablesearch.config import get_settings
+from pdftablesearch.session_store import (
+    delete_session,
+    read_session,
+    write_session,
+)
 from pdftablesearch.llm_client import ZaiLLMClient
 from pdftablesearch.pii_masking import mask_pii_in_html, mask_pii_text
 from pdftablesearch.translation import translate_html
@@ -153,6 +163,16 @@ class UpdateSessionRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class LDAPAuthRequest(BaseModel):
+    id: str
+    password: str
+
+
+class OTPAuthRequest(BaseModel):
+    pre_auth_token: str
+    otp: str
 
 
 @dataclass
@@ -414,15 +434,53 @@ class ConfirmGroupRequest(BaseModel):
 
 @app.post("/api/auth/login")
 async def login(body: LoginRequest) -> JSONResponse:
+    return await ldap_auth(LDAPAuthRequest(id=body.username, password=body.password))
+
+
+@app.post("/auth/ldap")
+async def ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
     client = ldap_client_from_settings()
-    user = client.authenticate(body.username, body.password)
+    user = client.authenticate(body.id, body.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = issue_pre_auth_jwt(user)
+    return JSONResponse(content={"pre_auth_token": token, "user": user.model_dump()})
 
-    token, ttl_seconds = issue_auth_token(user)
-    response = JSONResponse(content={"user": user.model_dump()})
+
+@app.post("/auth/otp")
+async def otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
+    user_data = decode_pre_auth_jwt(body.pre_auth_token)
+    if user_data is None:
+        raise HTTPException(status_code=401, detail="session_expired")
+
+    result = await call_otp_verify(
+        user_id=str(user_data["user_id"]),
+        otp=body.otp,
+        client_ip_str=client_ip(request),
+    )
+    if result == "6000":
+        raise HTTPException(status_code=401, detail="otp_failed")
+    if result != "0":
+        raise HTTPException(status_code=503, detail="otp_system_error")
+
+    token, ttl_seconds, jti = issue_session_jwt(user_data)
+    stored = await write_session(token, {**user_data, "jti": jti}, ttl_seconds)
+    if not stored:
+        raise HTTPException(status_code=503, detail="session_store_unavailable")
+
+    response = JSONResponse(content={"user": user_data})
     set_auth_cookie(response, token, ttl_seconds)
     return response
+
+
+@app.post("/api/auth/ldap")
+async def api_ldap_auth(body: LDAPAuthRequest) -> JSONResponse:
+    return await ldap_auth(body)
+
+
+@app.post("/api/auth/otp")
+async def api_otp(body: OTPAuthRequest, request: Request) -> JSONResponse:
+    return await otp(body, request)
 
 
 @app.post("/api/auth/logout")

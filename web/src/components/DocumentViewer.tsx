@@ -220,6 +220,11 @@ export default function DocumentViewer({ tableFilter = 'all' }: DocumentViewerPr
   }, [sessionId, scale, ensurePdfJs, reloadOverlays]);
 
   useEffect(() => {
+    if (selectedPdf && !pdfs.find(p => p.name === selectedPdf)) {
+      pdfDocRef.current = null;
+      setSelectedPdf('');
+      return;
+    }
     if (!selectedPdf && pdfs.length > 0) {
       setSelectedPdf(pdfs[0].name);
       return;
