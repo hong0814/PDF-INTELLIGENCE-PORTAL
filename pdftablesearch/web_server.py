@@ -8,14 +8,18 @@ Run with::
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import tempfile
 import time
 import uuid
 import asyncio
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
+from threading import Semaphore
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -63,6 +67,7 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 
 from pdftablesearch.local_embeddings import SentenceTransformerEmbeddings
 from pdftablesearch.models import TableSearchResult
+
 from pdftablesearch.vectorstores import create_vector_store as TableVectorStore
 
 from pdftablesearch.table_utils import (
@@ -80,17 +85,22 @@ from pdftablesearch.doc_processing import (
     _split_long_text, _split_html_by_paragraphs,
 )
 
+logger = logging.getLogger(__name__)
+
 _sessions: Dict[str, dict] = {}
 _embeddings: Optional[SentenceTransformerEmbeddings] = None
+_executor = ThreadPoolExecutor(max_workers=4)
+_llm_semaphore = Semaphore(10)
+
+SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "24"))
+SESSION_GC_INTERVAL_MINUTES = 30
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _embeddings
     warn_if_insecure_auth_secret()
-    # Clean up stale temp directories from previous runs
     import glob as _glob
-    import shutil
     for pattern in ["pdf_upload_*", "pdf_data_*", "pdf_docchunks_*"]:
         for d in _glob.glob(os.path.join(tempfile.gettempdir(), pattern)):
             try:
@@ -98,7 +108,38 @@ async def lifespan(application: FastAPI):
             except Exception:
                 pass
     _embeddings = SentenceTransformerEmbeddings()
+
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    scheduler = AsyncIOScheduler()
+
+    async def _gc_sessions():
+        cutoff = time.time() - SESSION_TTL_HOURS * 3600
+        expired = []
+        for sid, session in list(_sessions.items()):
+            last_activity_str = session.get("last_activity", "")
+            try:
+                last_activity = datetime.fromisoformat(last_activity_str).timestamp()
+            except Exception:
+                continue
+            if last_activity < cutoff:
+                expired.append(sid)
+        for sid in expired:
+            session = _sessions.pop(sid, None)
+            if session:
+                for dir_key in ("upload_dir", "data_dir", "doc_chunks_dir"):
+                    d = session.get(dir_key, "")
+                    if d and os.path.isdir(d):
+                        try:
+                            shutil.rmtree(d, ignore_errors=True)
+                        except Exception:
+                            pass
+        if expired:
+            logger.info("GC: removed %d expired sessions", len(expired))
+
+    scheduler.add_job(_gc_sessions, "interval", minutes=SESSION_GC_INTERVAL_MINUTES)
+    scheduler.start()
     yield
+    scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="PDFTableSearch API", version="0.1.0", lifespan=lifespan)
@@ -1118,28 +1159,31 @@ async def upload_pdfs(
             f.write(content)
 
         try:
-            pdf_output_dir = str(Path(upload_dir) / Path(filename).stem)
-            processor = PDFProcessor()
-            processor.load_documents(str(dest), use_hybrid=True, output_dir=pdf_output_dir)
-            documents = processor.get_documents()
+            loop = asyncio.get_event_loop()
 
-            standard_html_path = processor.convert_standard(str(dest), output_dir=pdf_output_dir)
+            def _process_pdf():
+                pdf_output_dir = str(Path(upload_dir) / Path(filename).stem)
+                processor = PDFProcessor()
+                processor.load_documents(str(dest), use_hybrid=True, output_dir=pdf_output_dir)
+                documents = processor.get_documents()
+                standard_html_path = processor.convert_standard(str(dest), output_dir=pdf_output_dir)
+                html_path: Optional[str] = None
+                md_path: Optional[str] = None
+                page_count: int = 0
+                conv_dir = Path(pdf_output_dir)
+                if conv_dir.exists():
+                    html_files = list(conv_dir.rglob("*.html"))
+                    if html_files:
+                        html_path = str(html_files[0])
+                    md_files = list(conv_dir.rglob("*.md"))
+                    if md_files:
+                        md_path = str(md_files[0])
+                if documents:
+                    max_page = max((doc.metadata.get("page_number", 0) for doc in documents), default=0)
+                    page_count = max_page
+                return documents, html_path, md_path, page_count, pdf_output_dir, standard_html_path
 
-            html_path: Optional[str] = None
-            md_path: Optional[str] = None
-            page_count: int = 0
-            conv_dir = Path(pdf_output_dir)
-            if conv_dir.exists():
-                html_files = list(conv_dir.rglob("*.html"))
-                if html_files:
-                    html_path = str(html_files[0])
-                md_files = list(conv_dir.rglob("*.md"))
-                if md_files:
-                    md_path = str(md_files[0])
-
-            if documents:
-                max_page = max((doc.metadata.get("page_number", 0) for doc in documents), default=0)
-                page_count = max_page
+            documents, html_path, md_path, page_count, pdf_output_dir, standard_html_path = await loop.run_in_executor(_executor, _process_pdf)
         except Exception as exc:
             pdf_results[filename] = {
                 "table_count": 0,
@@ -1569,12 +1613,13 @@ async def qa(
         ]
         accumulated = ""
         try:
-            for chunk in client._llm.stream(messages):
-                token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                if token:
-                    accumulated += token
-                    session["qa_results"][qa_key]["answer"] = accumulated
-                    await result_queue.put(token)
+            with _llm_semaphore:
+                for chunk in client._llm.stream(messages):
+                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if token:
+                        accumulated += token
+                        session["qa_results"][qa_key]["answer"] = accumulated
+                        await result_queue.put(token)
             session["qa_results"][qa_key]["done"] = True
         except Exception as exc:
             session["qa_results"][qa_key]["answer"] = f"오류: {exc}"
@@ -1685,11 +1730,12 @@ async def table_calculate(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
-            for chunk in client._llm.stream(messages):
-                token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                if token:
-                    data = json.dumps({"token": token}, ensure_ascii=False)
-                    yield f"data: {data}\n\n"
+            with _llm_semaphore:
+                for chunk in client._llm.stream(messages):
+                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if token:
+                        data = json.dumps({"token": token}, ensure_ascii=False)
+                        yield f"data: {data}\n\n"
             yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             data = json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -1821,24 +1867,25 @@ async def ask_document(
             # Retry loop for 429 rate limit
             max_attempts = 5
             accumulated = ""
-            for attempt in range(max_attempts):
-                try:
-                    for chunk in client._llm.stream(messages):
-                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                        if token:
-                            accumulated += token
-                            data = json.dumps({"token": token}, ensure_ascii=False)
-                            yield f"data: {data}\n\n"
-                    break  # success, exit retry loop
-                except Exception as stream_exc:
-                    err_msg = str(stream_exc)
-                    if "429" in err_msg and attempt < max_attempts - 1:
-                        wait = 15 * (attempt + 1)
-                        yield f"data: {json.dumps({'token': f'[재시도 중... {wait}초 대기 ({attempt+1}/{max_attempts})]'}, ensure_ascii=False)}\n\n"
-                        _time.sleep(wait)
-                        accumulated = ""
-                        continue
-                    raise
+            with _llm_semaphore:
+                for attempt in range(max_attempts):
+                    try:
+                        for chunk in client._llm.stream(messages):
+                            token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                            if token:
+                                accumulated += token
+                                data = json.dumps({"token": token}, ensure_ascii=False)
+                                yield f"data: {data}\n\n"
+                        break  # success, exit retry loop
+                    except Exception as stream_exc:
+                        err_msg = str(stream_exc)
+                        if "429" in err_msg and attempt < max_attempts - 1:
+                            wait = 15 * (attempt + 1)
+                            yield f"data: {json.dumps({'token': f'[재시도 중... {wait}초 대기 ({attempt+1}/{max_attempts})]'}, ensure_ascii=False)}\n\n"
+                            _time.sleep(wait)
+                            accumulated = ""
+                            continue
+                        raise
 
             used_match = re.search(r'사용출처:\s*([\d,\s]+)', accumulated)
             if used_match:
@@ -2098,7 +2145,6 @@ async def unified_search_endpoint(
             )
             table_results = table_store.similarity_search(query=body.query, k=15)
 
-            # --- Phase 2: Hybrid search on doc_chunks ---
             progress_callback("text", "텍스트 검색 중...", 40)
             doc_store = TableVectorStore(
                 embeddings=embeddings,
@@ -2285,21 +2331,22 @@ async def unified_search_endpoint(
 
             max_attempts = 5
             accumulated = ""
-            for attempt in range(max_attempts):
-                try:
-                    for chunk in client._llm.stream(messages):
-                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                        if token:
-                            accumulated += token
-                    break
-                except Exception as stream_exc:
-                    err_msg = str(stream_exc)
-                    if "429" in err_msg and attempt < max_attempts - 1:
-                        wait = 15 * (attempt + 1)
-                        _time.sleep(wait)
-                        accumulated = ""
-                        continue
-                    raise
+            with _llm_semaphore:
+                for attempt in range(max_attempts):
+                    try:
+                        for chunk in client._llm.stream(messages):
+                            token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                            if token:
+                                accumulated += token
+                        break
+                    except Exception as stream_exc:
+                        err_msg = str(stream_exc)
+                        if "429" in err_msg and attempt < max_attempts - 1:
+                            wait = 15 * (attempt + 1)
+                            _time.sleep(wait)
+                            accumulated = ""
+                            continue
+                        raise
 
             # --- Phase 5: Parse sources and build result ---
             progress_callback("done", "검색 완료!", 100)
@@ -2463,24 +2510,25 @@ async def unified_followup_endpoint(
 
             max_attempts = 5
             accumulated = ""
-            for attempt in range(max_attempts):
-                try:
-                    for chunk in client._llm.stream(messages):
-                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                        if token:
-                            accumulated += token
-                            data = json.dumps({"token": token}, ensure_ascii=False)
-                            yield f"data: {data}\n\n"
-                    break
-                except Exception as stream_exc:
-                    err_msg = str(stream_exc)
-                    if "429" in err_msg and attempt < max_attempts - 1:
-                        wait = 15 * (attempt + 1)
-                        yield f"data: {json.dumps({'token': f'[재시도 중... {wait}초 대기 ({attempt+1}/{max_attempts})]'}, ensure_ascii=False)}\n\n"
-                        _time.sleep(wait)
-                        accumulated = ""
-                        continue
-                    raise
+            with _llm_semaphore:
+                for attempt in range(max_attempts):
+                    try:
+                        for chunk in client._llm.stream(messages):
+                            token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                            if token:
+                                accumulated += token
+                                data = json.dumps({"token": token}, ensure_ascii=False)
+                                yield f"data: {data}\n\n"
+                        break
+                    except Exception as stream_exc:
+                        err_msg = str(stream_exc)
+                        if "429" in err_msg and attempt < max_attempts - 1:
+                            wait = 15 * (attempt + 1)
+                            yield f"data: {json.dumps({'token': f'[재시도 중... {wait}초 대기 ({attempt+1}/{max_attempts})]'}, ensure_ascii=False)}\n\n"
+                            _time.sleep(wait)
+                            accumulated = ""
+                            continue
+                        raise
 
             yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
         except Exception as exc:
